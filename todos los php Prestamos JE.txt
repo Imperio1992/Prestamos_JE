@@ -1,0 +1,4408 @@
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * actualizar_empleado.php
+ *********************************/
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+// SOLO POST
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header("Location: empleados.php");
+    exit;
+}
+
+// Datos
+$id  = $_POST['id'] ?? 0;
+$rol = $_POST['rol'] ?? '';
+
+// Roles válidos
+$roles_validos = ['ASESOR','SUPERVISOR','GERENTE'];
+
+if ($id == 0 || !in_array($rol, $roles_validos)) {
+    header("Location: empleados.php?error=1");
+    exit;
+}
+
+// Actualizar rol
+$stmt = $conexion->prepare("
+    UPDATE empleados
+    SET rol = ?
+    WHERE id_empleado = ?
+    AND estatus = 'ACTIVO'
+");
+
+if (!$stmt) {
+    die("Error en prepare: " . $conexion->error);
+}
+
+$stmt->bind_param("si", $rol, $id);
+$stmt->execute();
+
+// Regresar
+header("Location: empleados.php?ok=1");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * baja_empleado.php
+ *********************************/
+
+<?php
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+    header("Location: empleados.php");
+    exit;
+}
+
+$id = (int) $_GET['id'];
+
+// 1️⃣ Dar de baja empleado
+$conexion->query("
+    UPDATE empleados 
+    SET estatus = 'BAJA'
+    WHERE id_empleado = $id
+");
+
+// 2️⃣ Deshabilitar usuario relacionado
+$conexion->query("
+    UPDATE usuarios
+    SET estado = 0
+    WHERE id_empleado = $id
+");
+
+header("Location: empleados.php");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * bloquear_cliente_guardar.php
+ *********************************/
+
+<?php
+$roles_permitidos = ['GERENTE', 'SUPERVISOR'];
+include("seguridad.php");
+include("conexion.php");
+
+$id_cliente = intval($_POST['id_cliente'] ?? 0);
+$duracion   = intval($_POST['duracion'] ?? 0);
+
+if ($id_cliente == 0 || $duracion == 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+$fecha_bloqueo = date('Y-m-d');
+$fecha_fin = date('Y-m-d', strtotime("+$duracion days"));
+
+$conexion->query("
+    UPDATE clientes
+    SET estatus = 'BLOQUEADO',
+        fecha_bloqueo = '$fecha_bloqueo'
+    WHERE id_cliente = $id_cliente
+");
+
+header("Location: clientes.php?bloqueado=1");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * bloquear_cliente.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE Y SUPERVISOR
+$roles_permitidos = ['GERENTE', 'SUPERVISOR'];
+include("seguridad.php");
+include("conexion.php");
+
+$id_cliente = intval($_GET['id'] ?? $_POST['id_cliente'] ?? 0);
+if ($id_cliente === 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+/*********************************
+ * OBTENER CLIENTE
+ *********************************/
+$stmt = $conexion->prepare("
+    SELECT nombre, apellido
+    FROM clientes
+    WHERE id_cliente = ?
+");
+$stmt->bind_param("i", $id_cliente);
+$stmt->execute();
+$cliente = $stmt->get_result()->fetch_assoc();
+
+if (!$cliente) {
+    header("Location: clientes.php");
+    exit;
+}
+
+/*********************************
+ * PROCESAR BLOQUEO
+ *********************************/
+$error = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $dias   = intval($_POST['dias_bloqueo']);
+    $motivo = trim($_POST['motivo_bloqueo']);
+
+    if ($dias <= 0) {
+        $error = "Selecciona un tiempo válido de bloqueo";
+    } elseif ($motivo === "") {
+        $error = "El motivo del bloqueo es obligatorio";
+    } else {
+
+        $fecha_bloqueo    = date('Y-m-d');
+        $fecha_desbloqueo = date('Y-m-d', strtotime("+$dias days"));
+
+        $stmt = $conexion->prepare("
+            UPDATE clientes
+            SET 
+                estatus = 'BLOQUEADO',
+                fecha_bloqueo = ?,
+                dias_bloqueo = ?,
+                fecha_desbloqueo = ?,
+                motivo_bloqueo = ?
+            WHERE id_cliente = ?
+        ");
+
+        // TIPOS CORRECTOS: s = string | i = int
+        $stmt->bind_param(
+            "sissi",
+            $fecha_bloqueo,
+            $dias,
+            $fecha_desbloqueo,
+            $motivo,
+            $id_cliente
+        );
+
+        $stmt->execute();
+
+        header("Location: clientes.php?bloqueado=1");
+        exit;
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Bloquear Cliente | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+
+            <div class="card shadow">
+                <div class="card-header bg-danger text-white text-center">
+                    <h5>Bloquear Cliente</h5>
+                </div>
+
+                <div class="card-body">
+
+                    <p>
+                        Cliente:
+                        <strong><?= htmlspecialchars($cliente['nombre']." ".$cliente['apellido']) ?></strong>
+                    </p>
+
+                    <?php if ($error): ?>
+                        <div class="alert alert-danger"><?= $error ?></div>
+                    <?php endif; ?>
+
+                    <form method="POST">
+                        <input type="hidden" name="id_cliente" value="<?= $id_cliente ?>">
+
+                        <div class="mb-3">
+                            <label class="form-label">Tiempo de bloqueo</label>
+                            <select name="dias_bloqueo" class="form-select" required>
+                                <option value="">Seleccione...</option>
+                                <option value="15">15 días</option>
+                                <option value="30">30 días</option>
+                                <option value="60">60 días</option>
+                                <option value="90">90 días</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Motivo del bloqueo</label>
+                            <textarea
+                                name="motivo_bloqueo"
+                                class="form-control"
+                                rows="3"
+                                required></textarea>
+                        </div>
+
+                        <button class="btn btn-danger w-100 mb-2">
+                            🔒 Confirmar Bloqueo
+                        </button>
+
+                        <a href="clientes.php" class="btn btn-secondary w-100">
+                            ⬅ Cancelar
+                        </a>
+                    </form>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * bloquear.php
+ *********************************/
+
+
+<?php
+// 🔐 Solo GERENTE puede bloquear
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+
+include("conexion.php");
+
+// Validar que venga el ID
+if (!isset($_GET['id'])) {
+    echo "ID no válido";
+    exit;
+}
+
+$id = intval($_GET['id']);
+
+// Bloquear cliente
+$conexion->query("
+    UPDATE clientes 
+    SET estatus = 'BLOQUEADO' 
+    WHERE id_cliente = $id
+");
+
+// Redirigir con mensaje
+header("Location: buscar_cliente.php");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * buscador_cliente.php
+ *********************************/
+
+
+<?php include("conexion.php"); ?>
+
+<form method="GET">
+    Nombre / Teléfono / CURP:
+    <input type="text" name="dato">
+    <button>Buscar</button>
+</form>
+
+<?php
+if (isset($_GET['dato'])) {
+    $dato = $_GET['dato'];
+
+    $res = $conexion->query("
+        SELECT * FROM clientes
+        WHERE nombre LIKE '%$dato%'
+        OR telefono LIKE '%$dato%'
+        OR ine_curp LIKE '%$dato%'
+    ");
+
+    while ($c = $res->fetch_assoc()) {
+        echo "<hr>";
+        echo "ID: ".$c['id_cliente']."<br>";
+        echo $c['nombre']." ".$c['apellido']."<br>";
+        echo "Tel: ".$c['telefono']."<br>";
+        echo "Estatus: ".$c['estatus']."<br>";
+    }
+}
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * buscar_cliente.php
+ *********************************/
+
+
+<?php
+// 🔐 Roles permitidos
+$roles_permitidos = ['GERENTE', 'ASESOR'];
+include("seguridad.php");
+
+include("conexion.php");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Buscar Cliente</title>
+
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<div class="container mt-5">
+
+<?php include("menu.php"); ?>
+
+    <div class="card shadow">
+        <div class="card-header bg-primary text-white">
+            <h4 class="mb-0">Buscar Cliente</h4>
+        </div>
+
+        <div class="card-body">
+
+            <form method="GET" class="mb-4">
+                <label class="form-label">Buscar por nombre</label>
+                <input type="text" name="nombre" class="form-control" required>
+                <button class="btn btn-primary mt-3">Buscar</button>
+            </form>
+
+            <?php
+            if (isset($_GET['nombre'])) {
+
+                $nombre = $_GET['nombre'];
+
+                $res = $conexion->query("
+                    SELECT * FROM clientes 
+                    WHERE nombre LIKE '%$nombre%'
+                ");
+
+                while ($row = $res->fetch_assoc()) {
+            ?>
+                <div class="border rounded p-3 mb-3">
+
+                    <b><?= $row['nombre']." ".$row['apellido'] ?></b><br>
+                    Estatus: <?= $row['estatus'] ?><br>
+
+                    <a href="bloquear.php?id=<?= $row['id_cliente'] ?>" 
+                       class="btn btn-danger btn-sm mt-2">
+                        Bloquear
+                    </a>
+
+                    <a href="estado_cuenta.php?id=<?= $row['id_cliente'] ?>" 
+                       target="_blank"
+                       class="btn btn-primary btn-sm mt-2">
+                        Estado de Cuenta (PDF)
+                    </a>
+
+                </div>
+            <?php
+                }
+            }
+            ?>
+
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * caja_form.php
+ *********************************/
+
+
+<form method="POST" action="guardar_caja.php">
+
+    <label>Monto</label>
+    <input type="number" step="0.01" name="monto" required>
+
+    <label>Tipo</label>
+    <select name="tipo" required>
+        <option value="ENTRADA">Entrada</option>
+        <option value="SALIDA">Salida</option>
+    </select>
+
+    <label>Medio</label>
+    <select name="medio" required>
+        <option value="EFECTIVO">Efectivo</option>
+        <option value="BANCO">Banco</option>
+    </select>
+
+    <label>Concepto</label>
+    <input type="text" name="concepto">
+
+    <button type="submit">Guardar</button>
+
+</form>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * cerrar_prestamo.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+$id = $_GET['id'];
+
+$conexion->query("
+UPDATE prestamos 
+SET estado='PAGADO' 
+WHERE id_prestamo=$id
+");
+
+echo "Préstamo liquidado";
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * clientes.php
+ *********************************/
+
+
+<?php
+// 🔐 Acceso permitido
+$roles_permitidos = ['GERENTE', 'ASESOR', 'SUPERVISOR'];
+include("seguridad.php");
+include("conexion.php");
+
+/*********************************
+ * FILTROS (ROL + BUSCADOR)
+ *********************************/
+$condiciones = [];
+
+if ($_SESSION['rol'] === 'ASESOR') {
+    $condiciones[] = "c.id_asesor = " . intval($_SESSION['id_empleado']);
+}
+
+// BUSCADOR
+$buscar = trim($_GET['buscar'] ?? '');
+if (!empty($buscar)) {
+    $buscar_safe = $conexion->real_escape_string($buscar);
+    $condiciones[] = "(c.nombre LIKE '%$buscar_safe%' OR c.apellido LIKE '%$buscar_safe%')";
+}
+
+// Construir WHERE dinámico
+$filtro = "";
+if (count($condiciones) > 0) {
+    $filtro = "WHERE " . implode(" AND ", $condiciones);
+}
+
+/*********************************
+ * OBTENER CLIENTES
+ *********************************/
+$clientes = $conexion->query("
+    SELECT 
+        c.id_cliente,
+        c.nombre,
+        c.apellido,
+        c.fecha_registro,
+        c.estatus,
+        c.fecha_desbloqueo,
+        e.nombre AS asesor_nombre,
+        e.apellido AS asesor_apellido
+    FROM clientes c
+    INNER JOIN empleados e ON c.id_asesor = e.id_empleado
+    $filtro
+    ORDER BY c.fecha_registro DESC
+");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Clientes | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+<?php include("menu.php"); ?>
+
+<div class="container mt-4">
+    <h3 class="mb-3">Listado de Clientes</h3>
+
+    <?php if (in_array($_SESSION['rol'], ['GERENTE','SUPERVISOR'])): ?>
+        <div class="d-flex justify-content-end mb-3">
+            <a href="registrar_cliente.php" class="btn btn-success">➕ Nuevo Cliente</a>
+        </div>
+    <?php endif; ?>
+
+    <!-- 🔍 BUSCADOR -->
+    <form method="GET" class="mb-3">
+        <div class="row">
+            <div class="col-md-8">
+                <input type="text"
+                       name="buscar"
+                       class="form-control"
+                       placeholder="Buscar por nombre (ej. Juan)..."
+                       value="<?= htmlspecialchars($buscar) ?>">
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary w-100">🔍 Buscar</button>
+            </div>
+        </div>
+    </form>
+
+    <?php if (isset($_GET['bloqueado'])): ?>
+        <div class="alert alert-success">Cliente bloqueado correctamente</div>
+    <?php endif; ?>
+
+    <?php if (isset($_GET['desbloqueado'])): ?>
+        <div class="alert alert-success">Cliente desbloqueado correctamente</div>
+    <?php endif; ?>
+
+    <div class="card shadow">
+        <div class="card-header bg-primary text-white">
+            <h5 class="mb-0">Clientes registrados</h5>
+        </div>
+
+        <div class="card-body">
+            <table class="table table-bordered table-hover align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Cliente</th>
+                        <th>Asesor</th>
+                        <th>Fecha registro</th>
+                        <th>Estatus</th>
+                        <th width="320">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+
+                <?php while ($c = $clientes->fetch_assoc()): ?>
+                    <tr>
+                        <td><?= htmlspecialchars($c['nombre']." ".$c['apellido']) ?></td>
+                        <td><?= htmlspecialchars($c['asesor_nombre']." ".$c['asesor_apellido']) ?></td>
+                        <td><?= date("d/m/Y", strtotime($c['fecha_registro'])) ?></td>
+
+                        <td>
+                            <?php
+                            if ($c['estatus'] === 'ACTIVO') {
+                                echo '<span class="badge bg-success">ACTIVO</span>';
+                            } elseif ($c['estatus'] === 'MAL_HISTORIAL') {
+                                echo '<span class="badge bg-warning text-dark">MAL HISTORIAL</span>';
+                            } else {
+                                echo '<span class="badge bg-danger">BLOQUEADO</span>';
+                            }
+                            ?>
+                        </td>
+
+                        <td>
+                        <?php if (in_array($_SESSION['rol'], ['GERENTE','SUPERVISOR'])): ?>
+
+                            <?php if ($c['estatus'] !== 'BLOQUEADO'): ?>
+
+                                <a href="editar_cliente.php?id=<?= $c['id_cliente'] ?>" class="btn btn-primary btn-sm mb-1">✏️ Modificar</a>
+                                <a href="migrar_cliente.php?id=<?= $c['id_cliente'] ?>" class="btn btn-warning btn-sm mb-1">Migrar</a>
+                                <a href="bloquear_cliente.php?id=<?= $c['id_cliente'] ?>" class="btn btn-danger btn-sm mb-1">Bloquear</a>
+
+                            <?php else: ?>
+
+                                <?php
+                                $hoy = date('Y-m-d');
+                                if (!empty($c['fecha_desbloqueo']) && $hoy >= $c['fecha_desbloqueo']):
+                                ?>
+                                    <a href="desbloquear_cliente.php?id=<?= $c['id_cliente'] ?>"
+                                       class="btn btn-success btn-sm"
+                                       onclick="return confirm('¿Desbloquear este cliente?')">
+                                       🔓 Desbloquear
+                                    </a>
+                                <?php else: ?>
+                                    <span class="badge bg-secondary">
+                                        ⏳ Hasta <?= date("d/m/Y", strtotime($c['fecha_desbloqueo'])) ?>
+                                    </span>
+                                <?php endif; ?>
+
+                            <?php endif; ?>
+
+                        <?php else: ?>
+                            <span class="text-muted">Sin acciones</span>
+                        <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endwhile; ?>
+
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <a href="index.php" class="btn btn-secondary mt-3">⬅ Volver al inicio</a>
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * cobranza_diaria.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE', 'ASESOR'];
+include("seguridad.php");
+include("conexion.php");
+
+/* =========================
+   ASESOR ACTIVO
+========================= */
+$asesor_seleccionado = $_GET['asesor'] ?? '';
+
+if ($_SESSION['rol'] === 'ASESOR') {
+    $asesor_seleccionado = $_SESSION['id_empleado'];
+}
+
+/* =========================
+   LISTA ASESORES (GERENTE)
+========================= */
+$asesores = [];
+if ($_SESSION['rol'] === 'GERENTE') {
+    $res = $conexion->query("
+        SELECT id_empleado, nombre, apellido
+        FROM empleados
+        WHERE rol='ASESOR' AND estatus='ACTIVO'
+    ");
+    while ($a = $res->fetch_assoc()) $asesores[] = $a;
+}
+
+/* =========================
+   SI NO HAY ASESOR → NO DATOS
+========================= */
+$resumen = $cobradoHoy = $caja = ['0'=>0];
+$prestamos = null;
+
+if ($asesor_seleccionado != '') {
+
+    /* =========================
+       RESUMEN SOLO DEL ASESOR
+    ========================= */
+    $resumen = $conexion->query("
+        SELECT 
+            SUM(pr.total_pagar) AS total_prestamos,
+            SUM(pr.pago_diario) AS total_cobro_diario,
+            SUM(pr.total_pagar * 0.20 / 1.20) AS ganancia
+        FROM prestamos pr
+        WHERE pr.estado='ACTIVO'
+          AND pr.id_empleado=".(int)$asesor_seleccionado
+    )->fetch_assoc();
+
+    /* =========================
+       COBRADO HOY (ASESOR)
+    ========================= */
+    $cobradoHoy = $conexion->query("
+        SELECT SUM(pa.monto_pagado) AS cobrado_hoy
+        FROM pagos pa
+        INNER JOIN prestamos pr ON pa.id_prestamo=pr.id_prestamo
+        WHERE pa.fecha_pago=CURDATE()
+          AND pr.id_empleado=".(int)$asesor_seleccionado
+    )->fetch_assoc();
+
+    /* =========================
+       DINERO EN CAJA (ASESOR)
+    ========================= */
+    $caja = $conexion->query("
+        SELECT 
+            SUM(CASE WHEN tipo='ENTRADA' THEN monto ELSE 0 END) -
+            SUM(CASE WHEN tipo='SALIDA' THEN monto ELSE 0 END) AS caja
+        FROM caja
+        WHERE id_empleado=".(int)$asesor_seleccionado
+    )->fetch_assoc();
+
+    /* =========================
+       PRESTAMOS DEL ASESOR
+    ========================= */
+    $prestamos = $conexion->query("
+        SELECT 
+            pr.id_prestamo,
+            c.nombre,
+            c.apellido,
+            pr.total_pagar,
+            IFNULL(SUM(pa.monto_pagado),0) AS pagado,
+            pr.pago_diario
+        FROM prestamos pr
+        INNER JOIN clientes c ON pr.id_cliente=c.id_cliente
+        LEFT JOIN pagos pa ON pr.id_prestamo=pa.id_prestamo
+        WHERE pr.estado='ACTIVO'
+          AND pr.id_empleado=".(int)$asesor_seleccionado."
+        GROUP BY pr.id_prestamo
+    ");
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Cobranza Diaria</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+<?php include("menu.php"); ?>
+
+<div class="container mt-4">
+
+<?php if ($asesor_seleccionado != ''): ?>
+<!-- =========================
+     TARJETAS (SOLO ASESOR)
+========================= -->
+<div class="row mb-4">
+<?php
+$cards = [
+    ["Total Préstamos", $resumen['total_prestamos'], 'primary'],
+    ["Cobro Diario", $resumen['total_cobro_diario'], 'success'],
+    ["Ganancia 20%", $resumen['ganancia'], 'warning'],
+    ["Cobrado Hoy", $cobradoHoy['cobrado_hoy'], 'success'],
+    ["Dinero en Caja", $caja['caja'], 'dark']
+];
+foreach ($cards as $c) { ?>
+<div class="col-md-2">
+<div class="card text-center">
+<div class="card-body">
+<h6><?= $c[0] ?></h6>
+<h4 class="text-<?= $c[2] ?>">
+$<?= number_format($c[1] ?? 0,2) ?>
+</h4>
+</div>
+</div>
+</div>
+<?php } ?>
+</div>
+<?php endif; ?>
+
+<div class="card shadow">
+<div class="card-header bg-success text-white">
+<h4>Cobranza Diaria</h4>
+</div>
+<div class="card-body">
+
+<?php if ($_SESSION['rol'] === 'GERENTE'): ?>
+<form method="GET" class="mb-3">
+<select name="asesor" class="form-select" onchange="this.form.submit()">
+<option value="">-- Selecciona asesor --</option>
+<?php foreach ($asesores as $a): ?>
+<option value="<?= $a['id_empleado'] ?>" <?= $asesor_seleccionado==$a['id_empleado']?'selected':'' ?>>
+<?= $a['nombre']." ".$a['apellido'] ?>
+</option>
+<?php endforeach; ?>
+</select>
+</form>
+<?php endif; ?>
+
+<?php if ($asesor_seleccionado == ''): ?>
+<div class="alert alert-info text-center">
+Selecciona un asesor para ver su cobranza
+</div>
+<?php else: ?>
+
+<form action="registrar_cobros.php" method="POST">
+<table class="table table-bordered">
+<thead class="table-dark">
+<tr>
+<th>Cliente</th>
+<th>Total</th>
+<th>Pagado</th>
+<th>Saldo</th>
+<th>Pago Diario</th>
+<th>Cobro</th>
+</tr>
+</thead>
+<tbody>
+
+<?php while ($p = $prestamos->fetch_assoc()):
+$saldo = $p['total_pagar'] - $p['pagado']; ?>
+<tr>
+<td><?= $p['nombre']." ".$p['apellido'] ?></td>
+<td>$<?= number_format($p['total_pagar'],2) ?></td>
+<td>$<?= number_format($p['pagado'],2) ?></td>
+<td><b>$<?= number_format($saldo,2) ?></b></td>
+<td>$<?= number_format($p['pago_diario'],2) ?></td>
+<td>
+<input type="number"
+name="pagos[<?= $p['id_prestamo'] ?>]"
+class="form-control form-control-sm"
+min="0" max="<?= $saldo ?>">
+</td>
+</tr>
+<?php endwhile; ?>
+
+</tbody>
+</table>
+
+<button class="btn btn-success btn-lg">💰 Cobro</button>
+</form>
+
+<?php endif; ?>
+
+</div>
+</div>
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * cobrar.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE', 'ASESOR'];
+include("seguridad.php");
+include("conexion.php");
+include("menu.php");
+
+// ============================
+// VALIDAR ID
+// ============================
+if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+    die("Préstamo inválido");
+}
+
+$id = intval($_GET['id']);
+
+// ============================
+// DATOS DEL PRÉSTAMO
+// ============================
+$sql = "
+    SELECT 
+        pr.id_prestamo,
+        c.nombre,
+        c.apellido,
+        pr.total_pagar,
+        pr.pago_diario,
+        IFNULL(SUM(pa.monto_pagado),0) AS pagado
+    FROM prestamos pr
+    INNER JOIN clientes c ON pr.id_cliente = c.id_cliente
+    LEFT JOIN pagos pa ON pr.id_prestamo = pa.id_prestamo
+    WHERE pr.id_prestamo = $id
+    GROUP BY pr.id_prestamo
+";
+
+$prestamo = $conexion->query($sql)->fetch_assoc();
+
+if (!$prestamo) {
+    die("El préstamo no existe");
+}
+
+$saldo = $prestamo['total_pagar'] - $prestamo['pagado'];
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Cobrar</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+<div class="card shadow">
+    <div class="card-header bg-success text-white">
+        <h5 class="mb-0">Cobro de préstamo</h5>
+    </div>
+
+    <div class="card-body">
+
+        <p><b>Cliente:</b> <?= $prestamo['nombre']." ".$prestamo['apellido'] ?></p>
+        <p><b>Saldo actual:</b> $<?= number_format($saldo,2) ?></p>
+        <p><b>Pago diario sugerido:</b> $<?= number_format($prestamo['pago_diario'],2) ?></p>
+
+        <?php if ($saldo > 0) { ?>
+        <form method="POST" action="registrar_pago.php">
+            <input type="hidden" name="id_prestamo" value="<?= $prestamo['id_prestamo'] ?>">
+
+            <label class="form-label">Monto recibido</label>
+            <input type="number"
+                   name="monto_pagado"
+                   step="0.01"
+                   class="form-control mb-3"
+                   min="1"
+                   max="<?= $saldo ?>"
+                   required>
+
+            <button class="btn btn-success">Registrar pago</button>
+            <a href="cobranza_diaria.php" class="btn btn-secondary">Cancelar</a>
+        </form>
+        <?php } else { ?>
+            <div class="alert alert-success">
+                Este préstamo ya está totalmente pagado.
+            </div>
+            <a href="cobranza_diaria.php" class="btn btn-secondary">Regresar</a>
+        <?php } ?>
+
+    </div>
+</div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * conexion.php
+ *********************************/
+
+
+<?php
+$host = "localhost";
+$user = "root";
+$pass = "";
+$db   = "prestamos_je";
+
+$conexion = new mysqli($host, $user, $pass, $db);
+
+if ($conexion->connect_error) {
+    die("Error de conexión: " . $conexion->connect_error);
+}
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * desbloquear_cliente.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+/*********************************
+ * VALIDAR ID
+ *********************************/
+$id_cliente = intval($_GET['id'] ?? 0);
+if ($id_cliente === 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+/*********************************
+ * VALIDAR ESTADO Y FECHA
+ *********************************/
+$stmt = $conexion->prepare("
+    SELECT estatus, fecha_desbloqueo
+    FROM clientes
+    WHERE id_cliente = ?
+");
+$stmt->bind_param("i", $id_cliente);
+$stmt->execute();
+$cliente = $stmt->get_result()->fetch_assoc();
+
+$hoy = date('Y-m-d');
+
+if (
+    !$cliente ||
+    $cliente['estatus'] !== 'BLOQUEADO' ||
+    empty($cliente['fecha_desbloqueo']) ||
+    $hoy < $cliente['fecha_desbloqueo']
+) {
+    header("Location: clientes.php");
+    exit;
+}
+
+/*********************************
+ * DESBLOQUEAR CLIENTE
+ *********************************/
+$stmt = $conexion->prepare("
+    UPDATE clientes
+    SET 
+        estatus = 'ACTIVO',
+        fecha_bloqueo = NULL,
+        fecha_desbloqueo = NULL,
+        dias_bloqueo = NULL,
+        motivo_bloqueo = NULL
+    WHERE id_cliente = ?
+");
+$stmt->bind_param("i", $id_cliente);
+$stmt->execute();
+
+/*********************************
+ * REDIRECCIÓN
+ *********************************/
+header("Location: clientes.php?desbloqueado=1");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * editar_cliente.php
+ *********************************/
+
+
+<?php
+session_start();
+include("conexion.php");
+
+/*********************************
+ * SEGURIDAD POR ROL
+ *********************************/
+if (!isset($_SESSION['rol']) || !in_array($_SESSION['rol'], ['GERENTE', 'SUPERVISOR'])) {
+    header("Location: index.php");
+    exit;
+}
+
+/*********************************
+ * VALIDAR ID
+ *********************************/
+if (!isset($_GET['id']) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+    header("Location: clientes.php");
+    exit;
+}
+
+/*********************************
+ * ACTUALIZAR CLIENTE
+ *********************************/
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $id_cliente        = intval($_POST['id_cliente']);
+    $curp_ine          = trim($_POST['curp_ine']);
+    $nombre            = trim($_POST['nombre']);
+    $apellido          = trim($_POST['apellido']);
+    $fecha_nacimiento  = $_POST['fecha_nacimiento'];
+    $direccion         = trim($_POST['direccion']);
+    $numero_exterior   = trim($_POST['numero_exterior']);
+    $colonia           = trim($_POST['colonia']);
+    $telefono          = trim($_POST['telefono']);
+    $negocio           = trim($_POST['negocio']);
+    $observaciones     = trim($_POST['observaciones']);
+    $autoriza_credito  = $_POST['autoriza_credito'];
+    $id_asesor         = intval($_POST['id_asesor']);
+
+    // 🔹 SOLO EL GERENTE PUEDE CAMBIAR FECHA DE REGISTRO
+    if ($_SESSION['rol'] === 'GERENTE') {
+        $fecha_registro = $_POST['fecha_registro'];
+    } else {
+        // Si no es gerente, conservamos la original
+        $stmt_tmp = $conexion->prepare("SELECT fecha_registro FROM clientes WHERE id_cliente = ?");
+        $stmt_tmp->bind_param("i", $id_cliente);
+        $stmt_tmp->execute();
+        $tmp = $stmt_tmp->get_result()->fetch_assoc();
+        $fecha_registro = $tmp['fecha_registro'];
+    }
+
+    $stmt = $conexion->prepare("
+        UPDATE clientes SET
+            curp_ine = ?,
+            nombre = ?,
+            apellido = ?,
+            fecha_nacimiento = ?,
+            direccion = ?,
+            numero_exterior = ?,
+            colonia = ?,
+            telefono = ?,
+            negocio = ?,
+            observaciones = ?,
+            autoriza_credito = ?,
+            id_asesor = ?,
+            fecha_registro = ?
+        WHERE id_cliente = ?
+    ");
+
+    $stmt->bind_param(
+        "sssssssssssisi",
+        $curp_ine,
+        $nombre,
+        $apellido,
+        $fecha_nacimiento,
+        $direccion,
+        $numero_exterior,
+        $colonia,
+        $telefono,
+        $negocio,
+        $observaciones,
+        $autoriza_credito,
+        $id_asesor,
+        $fecha_registro,
+        $id_cliente
+    );
+
+    if ($stmt->execute()) {
+        header("Location: clientes.php?ok=1");
+        exit;
+    } else {
+        $error = "Error al actualizar el cliente";
+    }
+}
+
+/*********************************
+ * OBTENER DATOS CLIENTE
+ *********************************/
+$id_cliente = intval($_GET['id']);
+
+$stmt = $conexion->prepare("
+    SELECT *
+    FROM clientes
+    WHERE id_cliente = ?
+    LIMIT 1
+");
+
+$stmt->bind_param("i", $id_cliente);
+$stmt->execute();
+$resultado = $stmt->get_result();
+
+if ($resultado->num_rows === 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+$cliente = $resultado->fetch_assoc();
+
+/*********************************
+ * ASESORES
+ *********************************/
+$asesores = $conexion->query("
+    SELECT id_empleado, nombre, apellido
+    FROM empleados
+    WHERE rol = 'ASESOR'
+    ORDER BY nombre
+");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar Cliente | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+<?php include("menu.php"); ?>
+
+<div class="container mt-4">
+
+<h3 class="mb-3">Editar Cliente</h3>
+
+<?php if (isset($error)) { ?>
+    <div class="alert alert-danger"><?= $error ?></div>
+<?php } ?>
+
+<div class="card shadow">
+<div class="card-header bg-warning">
+    <strong>Información del cliente</strong>
+</div>
+
+<div class="card-body">
+<form method="POST">
+
+<input type="hidden" name="id_cliente" value="<?= $cliente['id_cliente'] ?>">
+
+<div class="row mb-3">
+    <div class="col-md-4">
+        <label class="form-label">CURP / INE</label>
+        <input type="text" name="curp_ine" class="form-control"
+               value="<?= htmlspecialchars($cliente['curp_ine']) ?>" required>
+    </div>
+
+    <div class="col-md-4">
+        <label class="form-label">Nombre</label>
+        <input type="text" name="nombre" class="form-control"
+               value="<?= htmlspecialchars($cliente['nombre']) ?>" required>
+    </div>
+
+    <div class="col-md-4">
+        <label class="form-label">Apellido</label>
+        <input type="text" name="apellido" class="form-control"
+               value="<?= htmlspecialchars($cliente['apellido']) ?>" required>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <div class="col-md-3">
+        <label class="form-label">Fecha nacimiento</label>
+        <input type="date" name="fecha_nacimiento" class="form-control"
+               value="<?= $cliente['fecha_nacimiento'] ?>">
+    </div>
+
+    <div class="col-md-3">
+        <label class="form-label">Autoriza crédito</label>
+        <select name="autoriza_credito" class="form-select">
+            <option value="SI" <?= $cliente['autoriza_credito']=='SI'?'selected':'' ?>>SI</option>
+            <option value="NO" <?= $cliente['autoriza_credito']=='NO'?'selected':'' ?>>NO</option>
+        </select>
+    </div>
+
+    <div class="col-md-3">
+        <label class="form-label">Asesor</label>
+        <select name="id_asesor" class="form-select">
+            <?php while ($a = $asesores->fetch_assoc()) { ?>
+                <option value="<?= $a['id_empleado'] ?>"
+                    <?= $cliente['id_asesor']==$a['id_empleado']?'selected':'' ?>>
+                    <?= $a['nombre'].' '.$a['apellido'] ?>
+                </option>
+            <?php } ?>
+        </select>
+    </div>
+</div>
+
+<div class="col-md-3">
+    <label class="form-label">Fecha de Registro</label>
+
+    <?php if ($_SESSION['rol'] === 'GERENTE'): ?>
+        <input type="date" name="fecha_registro" class="form-control"
+               value="<?= date('Y-m-d', strtotime($cliente['fecha_registro'])) ?>">
+    <?php else: ?>
+        <input type="date" class="form-control"
+               value="<?= date('Y-m-d', strtotime($cliente['fecha_registro'])) ?>"
+               disabled>
+        <input type="hidden" name="fecha_registro"
+               value="<?= date('Y-m-d', strtotime($cliente['fecha_registro'])) ?>">
+    <?php endif; ?>
+</div>
+
+<div class="row mb-3 mt-3">
+    <div class="col-md-4">
+        <label class="form-label">Dirección</label>
+        <input type="text" name="direccion" class="form-control"
+               value="<?= htmlspecialchars($cliente['direccion']) ?>">
+    </div>
+
+    <div class="col-md-2">
+        <label class="form-label">Número ext.</label>
+        <input type="text" name="numero_exterior" class="form-control"
+               value="<?= htmlspecialchars($cliente['numero_exterior']) ?>">
+    </div>
+
+    <div class="col-md-3">
+        <label class="form-label">Colonia</label>
+        <input type="text" name="colonia" class="form-control"
+               value="<?= htmlspecialchars($cliente['colonia']) ?>">
+    </div>
+
+    <div class="col-md-3">
+        <label class="form-label">Teléfono</label>
+        <input type="text" name="telefono" class="form-control"
+               value="<?= htmlspecialchars($cliente['telefono']) ?>">
+    </div>
+</div>
+
+<div class="mb-3">
+    <label class="form-label">Negocio donde trabaja</label>
+    <input type="text" name="negocio" class="form-control"
+           value="<?= htmlspecialchars($cliente['negocio']) ?>">
+</div>
+
+<div class="mb-3">
+    <label class="form-label">Observaciones</label>
+    <textarea name="observaciones" class="form-control" rows="3"><?= htmlspecialchars($cliente['observaciones']) ?></textarea>
+</div>
+
+<div class="d-flex justify-content-between">
+    <a href="clientes.php" class="btn btn-secondary">⬅ Cancelar</a>
+    <button type="submit" class="btn btn-primary">💾 Guardar Cambios</button>
+</div>
+
+</form>
+</div>
+</div>
+
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * editar_empleado.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+include("menu.php");
+
+if (!isset($_GET['id'])) {
+    header("Location: empleados.php");
+    exit;
+}
+
+$id_empleado = (int)$_GET['id'];
+
+// OBTENER EMPLEADO
+$emp = $conexion->prepare("
+    SELECT *
+    FROM empleados
+    WHERE id_empleado = ?
+");
+$emp->bind_param("i", $id_empleado);
+$emp->execute();
+$empleado = $emp->get_result()->fetch_assoc();
+
+if (!$empleado) {
+    header("Location: empleados.php");
+    exit;
+}
+
+// OBTENER USUARIO (por nombre completo como lo tienes registrado)
+$usuario = $conexion->prepare("
+    SELECT *
+    FROM usuarios
+    WHERE rol = ?
+    LIMIT 1
+");
+$usuario->bind_param("s", $empleado['rol']);
+$usuario->execute();
+$usr = $usuario->get_result()->fetch_assoc();
+
+// GUARDAR CAMBIOS
+if ($_POST) {
+
+    // ACTUALIZAR EMPLEADO
+    $upd_emp = $conexion->prepare("
+        UPDATE empleados SET
+            nombre = ?,
+            apellido = ?,
+            telefono = ?,
+            direccion = ?,
+            rol = ?
+        WHERE id_empleado = ?
+    ");
+
+    $upd_emp->bind_param(
+        "sssssi",
+        $_POST['nombre'],
+        $_POST['apellido'],
+        $_POST['telefono'],
+        $_POST['direccion'],
+        $_POST['rol'],
+        $id_empleado
+    );
+
+    $upd_emp->execute();
+
+    // ACTUALIZAR USUARIO
+    if (!empty($_POST['password'])) {
+        $hash = password_hash($_POST['password'], PASSWORD_DEFAULT);
+
+        $upd_usr = $conexion->prepare("
+            UPDATE usuarios SET
+                usuario = ?,
+                password = ?,
+                rol = ?
+            WHERE usuario = ?
+        ");
+
+        $upd_usr->bind_param(
+            "ssss",
+            $_POST['usuario'],
+            $hash,
+            $_POST['rol'],
+            $usr['usuario']
+        );
+    } else {
+        $upd_usr = $conexion->prepare("
+            UPDATE usuarios SET
+                usuario = ?,
+                rol = ?
+            WHERE usuario = ?
+        ");
+
+        $upd_usr->bind_param(
+            "sss",
+            $_POST['usuario'],
+            $_POST['rol'],
+            $usr['usuario']
+        );
+    }
+
+    $upd_usr->execute();
+
+    header("Location: empleados.php?ok=1");
+    exit;
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar Empleado</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+<div class="card shadow">
+    <div class="card-header bg-warning">
+        <h4 class="mb-0">✏️ Editar Empleado</h4>
+    </div>
+
+    <div class="card-body">
+
+        <form method="POST">
+
+            <h5 class="mb-3">👤 Datos del Empleado</h5>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Nombre</label>
+                    <input name="nombre" class="form-control"
+                           value="<?= $empleado['nombre'] ?>" required>
+                </div>
+
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Apellido</label>
+                    <input name="apellido" class="form-control"
+                           value="<?= $empleado['apellido'] ?>" required>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Teléfono</label>
+                    <input name="telefono" class="form-control"
+                           value="<?= $empleado['telefono'] ?>">
+                </div>
+
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Dirección</label>
+                    <input name="direccion" class="form-control"
+                           value="<?= $empleado['direccion'] ?>">
+                </div>
+            </div>
+
+            <h5 class="mt-4 mb-3">🔐 Acceso al Sistema</h5>
+
+            <div class="mb-3">
+                <label class="form-label">Usuario</label>
+                <input name="usuario" class="form-control"
+                       value="<?= $usr['usuario'] ?>" required>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Nueva contraseña</label>
+                <input type="password" name="password"
+                       class="form-control"
+                       placeholder="Dejar en blanco para no cambiar">
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Rol</label>
+                <select name="rol" class="form-select">
+                    <option <?= $empleado['rol']=='ASESOR'?'selected':'' ?>>ASESOR</option>
+                    <option <?= $empleado['rol']=='SUPERVISOR'?'selected':'' ?>>SUPERVISOR</option>
+                    <option <?= $empleado['rol']=='GERENTE'?'selected':'' ?>>GERENTE</option>
+                </select>
+            </div>
+
+            <div class="mt-4">
+                <button class="btn btn-primary">
+                    💾 Guardar Cambios
+                </button>
+
+                <a href="empleados.php" class="btn btn-secondary">
+                    Cancelar
+                </a>
+            </div>
+
+        </form>
+
+    </div>
+</div>
+
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * eliminar_cliente.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+$id_cliente = intval($_GET['id'] ?? 0);
+if ($id_cliente == 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+// VALIDAR QUE EXISTA
+$existe = $conexion->query("
+    SELECT id_cliente 
+    FROM clientes 
+    WHERE id_cliente = $id_cliente
+");
+
+if ($existe->num_rows == 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+// BLOQUEO POR MAL HISTORIAL
+$conexion->query("
+    UPDATE clientes
+    SET estatus = 'MAL_HISTORIAL',
+        fecha_bloqueo = CURDATE()
+    WHERE id_cliente = $id_cliente
+");
+
+header("Location: clientes.php?bloqueado=1");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * eliminar_empleado.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+// Validar ID
+if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+    header("Location: empleados.php");
+    exit;
+}
+
+$id_empleado = intval($_GET['id']);
+
+// 🔍 Verificar que exista el empleado
+$existe = $conexion->prepare("
+    SELECT id_empleado 
+    FROM empleados 
+    WHERE id_empleado = ?
+");
+$existe->bind_param("i", $id_empleado);
+$existe->execute();
+$res = $existe->get_result();
+
+if ($res->num_rows === 0) {
+    header("Location: empleados.php");
+    exit;
+}
+
+// 🚫 Verificar si tiene préstamos asociados
+$prestamos = $conexion->prepare("
+    SELECT id_prestamo 
+    FROM prestamos 
+    WHERE id_empleado = ?
+    LIMIT 1
+");
+$prestamos->bind_param("i", $id_empleado);
+$prestamos->execute();
+$tienePrestamos = $prestamos->get_result()->num_rows > 0;
+
+if ($tienePrestamos) {
+    // ❌ NO eliminar si tiene préstamos
+    header("Location: empleados.php?error=prestamos");
+    exit;
+}
+
+// 🗑️ ELIMINAR DEFINITIVAMENTE
+$eliminar = $conexion->prepare("
+    DELETE FROM empleados 
+    WHERE id_empleado = ?
+");
+$eliminar->bind_param("i", $id_empleado);
+
+if ($eliminar->execute()) {
+    header("Location: empleados.php?eliminado=1");
+} else {
+    header("Location: empleados.php?error=1");
+}
+
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * empleados.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+include("menu.php");
+
+// MENSAJES
+$mensaje = "";
+$tipo = "";
+
+if (isset($_GET['ok'])) {
+    $mensaje = "Empleado actualizado correctamente";
+    $tipo = "success";
+}
+
+if (isset($_GET['eliminado'])) {
+    $mensaje = "Empleado eliminado definitivamente";
+    $tipo = "success";
+}
+
+if (isset($_GET['error']) && $_GET['error'] == 'prestamos') {
+    $mensaje = "No se puede eliminar el empleado porque tiene préstamos registrados";
+    $tipo = "danger";
+}
+
+// BÚSQUEDA
+$filtro = "";
+if (!empty($_GET['buscar'])) {
+    $buscar = $conexion->real_escape_string($_GET['buscar']);
+    $filtro = "WHERE e.nombre LIKE '%$buscar%' OR e.apellido LIKE '%$buscar%'";
+}
+
+// OBTENER EMPLEADOS + USUARIO
+$empleados = $conexion->query("
+    SELECT 
+        e.id_empleado,
+        e.nombre,
+        e.apellido,
+        e.telefono,
+        e.direccion,
+        e.rol,
+        e.estatus,
+        u.usuario
+    FROM empleados e
+    LEFT JOIN usuarios u ON u.id_empleado = e.id_empleado
+    $filtro
+    ORDER BY e.estatus, e.nombre
+");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Empleados</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+    <h3 class="mb-3">👥 Gestión de Empleados</h3>
+
+    <?php if ($mensaje != "") { ?>
+        <div class="alert alert-<?= $tipo ?>">
+            <?= $mensaje ?>
+        </div>
+    <?php } ?>
+
+    <!-- BUSCADOR -->
+    <form method="GET" class="mb-3 d-flex">
+        <input type="text"
+               name="buscar"
+               class="form-control me-2"
+               placeholder="Buscar por nombre o apellido"
+               value="<?= $_GET['buscar'] ?? '' ?>">
+        <button class="btn btn-primary">Buscar</button>
+    </form>
+
+    <!-- TABLA -->
+    <div class="table-responsive">
+    <table class="table table-bordered table-hover bg-white shadow-sm align-middle">
+        <thead class="table-dark">
+            <tr>
+                <th>Empleado</th>
+                <th>Usuario</th>
+                <th>Teléfono</th>
+                <th>Dirección</th>
+                <th>Rol</th>
+                <th>Estatus</th>
+                <th width="340">Acciones</th>
+            </tr>
+        </thead>
+        <tbody>
+
+        <?php while ($e = $empleados->fetch_assoc()) { ?>
+            <tr>
+                <td><b><?= $e['nombre']." ".$e['apellido'] ?></b></td>
+
+                <td>
+                    <?= $e['usuario'] ?? '<span class="text-danger">SIN USUARIO</span>' ?>
+                </td>
+
+                <td><?= $e['telefono'] ?: '-' ?></td>
+
+                <td><?= $e['direccion'] ?: '-' ?></td>
+
+                <td>
+                    <span class="badge bg-info text-dark">
+                        <?= $e['rol'] ?>
+                    </span>
+                </td>
+
+                <td>
+                    <?php if ($e['estatus'] == 'ACTIVO') { ?>
+                        <span class="badge bg-success">ACTIVO</span>
+                    <?php } else { ?>
+                        <span class="badge bg-secondary">BAJA</span>
+                    <?php } ?>
+                </td>
+
+                <!-- ACCIONES -->
+                <td>
+
+                    <?php if ($e['estatus'] == 'ACTIVO') { ?>
+
+                        <a href="editar_empleado.php?id=<?= $e['id_empleado'] ?>"
+                           class="btn btn-warning btn-sm mb-1">
+                           ✏️ Editar
+                        </a>
+
+                        <a href="baja_empleado.php?id=<?= $e['id_empleado'] ?>"
+                           class="btn btn-secondary btn-sm mb-1"
+                           onclick="return confirm('¿Dar de baja al empleado?')">
+                           Baja
+                        </a>
+
+                    <?php } else { ?>
+
+                        <a href="reactivar_empleado.php?id=<?= $e['id_empleado'] ?>"
+                           class="btn btn-success btn-sm mb-1"
+                           onclick="return confirm('¿Reactivar empleado?')">
+                           Reactivar
+                        </a>
+
+                    <?php } ?>
+
+                    <!-- 📊 BOTÓN ESTATUS -->
+                    <a href="estatus_empleado.php?id=<?= $e['id_empleado'] ?>"
+                       class="btn btn-info btn-sm mb-1">
+                       📊 Estatus
+                    </a>
+
+                    <a href="eliminar_empleado.php?id=<?= $e['id_empleado'] ?>"
+                       class="btn btn-danger btn-sm"
+                       onclick="return confirm('⚠️ ¿Eliminar DEFINITIVAMENTE este empleado? Esta acción no se puede deshacer.')">
+                       🗑️ Eliminar
+                    </a>
+
+                </td>
+            </tr>
+        <?php } ?>
+
+        </tbody>
+    </table>
+    </div>
+
+    <a href="index.php" class="btn btn-secondary mt-3">
+        ⬅ Volver al inicio
+    </a>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * encriptar.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+$res = $conexion->query("SELECT id_usuario, password FROM usuarios");
+
+while ($u = $res->fetch_assoc()) {
+
+    // Si ya está encriptada, la saltamos
+    if (strlen($u['password']) > 20) continue;
+
+    $hash = password_hash($u['password'], PASSWORD_DEFAULT);
+
+    $conexion->query("
+        UPDATE usuarios 
+        SET password='$hash' 
+        WHERE id_usuario={$u['id_usuario']}
+    ");
+}
+
+echo "Contraseñas encriptadas correctamente";
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * estado_cuenta.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+require("fpdf.php");
+
+$id_cliente = $_GET['id'];
+
+// Datos del cliente
+$cliente = $conexion->query("
+    SELECT * FROM clientes WHERE id_cliente=$id_cliente
+")->fetch_assoc();
+
+// Préstamos del cliente
+$prestamos = $conexion->query("
+    SELECT pr.*, 
+    IFNULL(SUM(pa.monto_pagado),0) AS pagado
+    FROM prestamos pr
+    LEFT JOIN pagos pa ON pr.id_prestamo = pa.id_prestamo
+    WHERE pr.id_cliente=$id_cliente
+    GROUP BY pr.id_prestamo
+");
+
+$pdf = new FPDF();
+$pdf->AddPage();
+$pdf->SetFont("Arial","B",14);
+
+// TÍTULO
+$pdf->Cell(0,10,"ESTADO DE CUENTA - PRESTAMOS JE",0,1,"C");
+$pdf->Ln(5);
+
+// CLIENTE
+$pdf->SetFont("Arial","",11);
+$pdf->Cell(0,8,"Cliente: ".$cliente['nombre']." ".$cliente['apellido'],0,1);
+$pdf->Cell(0,8,"Telefono: ".$cliente['telefono'],0,1);
+$pdf->Cell(0,8,"Direccion: ".$cliente['direccion'],0,1);
+$pdf->Ln(5);
+
+// TABLA
+$pdf->SetFont("Arial","B",10);
+$pdf->Cell(30,8,"Prestamo",1);
+$pdf->Cell(30,8,"Monto",1);
+$pdf->Cell(30,8,"Pagado",1);
+$pdf->Cell(30,8,"Saldo",1);
+$pdf->Cell(30,8,"Estado",1);
+$pdf->Ln();
+
+$pdf->SetFont("Arial","",10);
+
+while ($p = $prestamos->fetch_assoc()) {
+    $saldo = $p['total_pagar'] - $p['pagado'];
+
+    $pdf->Cell(30,8,$p['id_prestamo'],1);
+    $pdf->Cell(30,8,"$".$p['total_pagar'],1);
+    $pdf->Cell(30,8,"$".$p['pagado'],1);
+    $pdf->Cell(30,8,"$".$saldo,1);
+    $pdf->Cell(30,8,$p['estado'],1);
+    $pdf->Ln();
+}
+
+$pdf->Ln(10);
+$pdf->Cell(0,8,"Gracias por su preferencia.",0,1,"C");
+
+$pdf->Output();
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * estatus_caja.php
+ *********************************/
+
+
+<?php
+session_start();
+include("conexion.php");
+
+$id_empleado = $_SESSION['id_personal'];
+
+/* 💵 EFECTIVO (ENTRADAS - SALIDAS) */
+$efectivo = $conexion->query("
+SELECT IFNULL(SUM(
+    CASE 
+        WHEN tipo='ENTRADA' THEN monto
+        ELSE -monto
+    END
+),0) total
+FROM caja
+WHERE id_empleado=$id_empleado
+AND medio='EFECTIVO'
+")->fetch_assoc()['total'];
+
+/* 🏦 BANCO (SOLO ENTRADAS) */
+$banco = $conexion->query("
+SELECT IFNULL(SUM(monto),0) total
+FROM caja
+WHERE id_empleado=$id_empleado
+AND medio='BANCO'
+AND tipo='ENTRADA'
+")->fetch_assoc()['total'];
+
+/* 🧮 TOTAL */
+$total_caja = $efectivo + $banco;
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * estatus_empleado.php
+ *********************************/
+
+
+<?php
+session_start();
+include("conexion.php");
+
+/* ============================
+   SELECCIÓN DE EMPLEADO
+============================ */
+if (isset($_GET['empleado'])) {
+    $_SESSION['empleado_activo'] = (int)$_GET['empleado'];
+}
+$id_empleado = $_SESSION['empleado_activo'] ?? 0;
+
+/* ============================
+   LISTA DE EMPLEADOS
+============================ */
+$empleados = $conexion->query("
+    SELECT id_empleado, nombre, apellido
+    FROM empleados
+    WHERE estatus='ACTIVO'
+    ORDER BY nombre
+");
+
+/* ============================
+   INGRESO EFECTIVO
+============================ */
+if (isset($_POST['ingreso_efectivo'])) {
+    $monto = floatval($_POST['monto']);
+    $stmt = $conexion->prepare("
+        INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+        VALUES ('ENTRADA','INGRESO EFECTIVO','EFECTIVO',?,?)
+    ");
+    $stmt->bind_param("di", $monto, $id_empleado);
+    $stmt->execute();
+}
+
+/* ============================
+   INGRESO BANCO
+============================ */
+if (isset($_POST['ingreso_banco'])) {
+    $monto = floatval($_POST['monto']);
+    $stmt = $conexion->prepare("
+        INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+        VALUES ('ENTRADA','INGRESO BANCA MOVIL','BANCO',?,?)
+    ");
+    $stmt->bind_param("di", $monto, $id_empleado);
+    $stmt->execute();
+}
+
+/* ============================
+   GASTOS / DEDUCCIONES
+============================ */
+if (isset($_POST['gasto'])) {
+    $concepto = $_POST['concepto'];
+    $medio    = $_POST['medio'];
+    $monto    = floatval($_POST['monto']);
+
+    $stmt = $conexion->prepare("
+        INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+        VALUES ('SALIDA',?,?,?,?)
+    ");
+
+    $stmt->bind_param("ssdi", $concepto, $medio, $monto, $id_empleado);
+    $stmt->execute();
+}
+
+/* =====================================================
+   🔥 NUEVO: RETIRO DE GANANCIAS AUTOMÁTICO (TU MODELO)
+===================================================== */
+if (isset($_POST['retirar_ganancia'])) {
+
+    // Calcular caja actual
+    $res = $conexion->query("
+        SELECT IFNULL(SUM(CASE WHEN tipo='ENTRADA' THEN monto ELSE -monto END),0) AS total
+        FROM caja
+        WHERE id_empleado = $id_empleado
+    ");
+    $row = $res->fetch_assoc();
+    $caja_actual = floatval($row['total']);
+
+    if ($caja_actual < 30000) {
+        $_SESSION['mensaje'] = "❌ No hay suficiente dinero para retirar ganancias.";
+    } else {
+
+        // Retiro total = 30,000
+        // 25,000 para propietario
+        $stmt = $conexion->prepare("
+            INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+            VALUES ('SALIDA','RETIRO GANANCIA PROPIETARIO','EFECTIVO',?,?)
+        ");
+        $m1 = 25000;
+        $stmt->bind_param("di", $m1, $id_empleado);
+        $stmt->execute();
+
+        // 5,000 para asesor
+        $stmt = $conexion->prepare("
+            INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+            VALUES ('SALIDA','BONO GANANCIA ASESOR','EFECTIVO',?,?)
+        ");
+        $m2 = 5000;
+        $stmt->bind_param("di", $m2, $id_empleado);
+        $stmt->execute();
+
+        $_SESSION['mensaje'] = "✅ Se retiraron $30,000 de ganancias (25,000 propietario + 5,000 asesor).";
+    }
+
+    header("Location: estatus_empleado.php");
+    exit;
+}
+
+/* ============================
+   FUNCIONES
+============================ */
+function totalCaja($c,$id,$medio=null){
+    $f = $medio ? "AND medio='$medio'" : "";
+    return $c->query("
+        SELECT IFNULL(SUM(CASE WHEN tipo='ENTRADA' THEN monto ELSE -monto END),0) t
+        FROM caja WHERE id_empleado=$id $f
+    ")->fetch_assoc()['t'];
+}
+
+function cobranza($c,$id,$cond){
+    return $c->query("
+        SELECT IFNULL(SUM(pa.monto_pagado),0) t
+        FROM pagos pa
+        INNER JOIN prestamos pr ON pa.id_prestamo=pr.id_prestamo
+        WHERE pr.id_empleado=$id $cond
+    ")->fetch_assoc()['t'];
+}
+
+function totalPrestamos($c,$id){
+    return $c->query("
+        SELECT IFNULL(SUM(total_pagar),0) t
+        FROM prestamos
+        WHERE estado='ACTIVO' AND id_empleado=$id
+    ")->fetch_assoc()['t'];
+}
+
+/* ============================
+   TOTALES
+============================ */
+$caja_total = totalCaja($conexion,$id_empleado);
+$efectivo   = totalCaja($conexion,$id_empleado,'EFECTIVO');
+$banco      = totalCaja($conexion,$id_empleado,'BANCO');
+$prestamos_total = totalPrestamos($conexion,$id_empleado);
+
+$hoy    = cobranza($conexion,$id_empleado,"AND pa.fecha_pago=CURDATE()");
+$semana = cobranza($conexion,$id_empleado,"AND YEARWEEK(pa.fecha_pago,1)=YEARWEEK(CURDATE(),1)");
+$mes    = cobranza($conexion,$id_empleado,"AND MONTH(pa.fecha_pago)=MONTH(CURDATE()) AND YEAR(pa.fecha_pago)=YEAR(CURDATE())");
+$anio   = cobranza($conexion,$id_empleado,"AND YEAR(pa.fecha_pago)=YEAR(CURDATE())");
+
+$esSabado = date('N') == 6;
+$bonoDisponible = ($semana >= 30000 && $esSabado);
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Estatus de Caja</title>
+<style>
+body{font-family:Segoe UI;background:#eef1f5;padding:20px}
+.container{max-width:1300px;margin:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:15px}
+.card{background:#fff;padding:18px;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
+.big{font-size:1.6em;font-weight:bold}
+.btn{background:#2c3e50;color:#fff;padding:10px;border:none;border-radius:6px;cursor:pointer}
+.fixed{max-height:320px;overflow:auto}
+select,input{width:100%;padding:8px}
+table th{text-align:left}
+.alert{padding:10px;margin:10px 0;border-radius:6px}
+.alert-success{background:#eafaf1;color:#0f5132}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<a href="empleados.php" class="btn">⬅ Regresar</a>
+
+<h2>📊 Estatus de Caja</h2>
+
+<?php if(isset($_SESSION['mensaje'])): ?>
+<div class="alert alert-success">
+<?= $_SESSION['mensaje']; unset($_SESSION['mensaje']); ?>
+</div>
+<?php endif; ?>
+
+<form method="GET" class="card">
+<select name="empleado" onchange="this.form.submit()">
+<option value="">-- Selecciona empleado --</option>
+<?php while($e=$empleados->fetch_assoc()): ?>
+<option value="<?=$e['id_empleado']?>" <?=($e['id_empleado']==$id_empleado?'selected':'')?>>
+<?=$e['nombre']." ".$e['apellido']?>
+</option>
+<?php endwhile; ?>
+</select>
+</form>
+
+<div class="grid">
+<div class="card"><h3>🏦 Caja</h3><div class="big">$<?=number_format($caja_total,2)?></div></div>
+<div class="card"><h3>💵 Efectivo</h3><div class="big">$<?=number_format($efectivo,2)?></div></div>
+<div class="card"><h3>📱 Banco</h3><div class="big">$<?=number_format($banco,2)?></div></div>
+<div class="card"><h3>💳 Préstamos Activos</h3><div class="big">$<?=number_format($prestamos_total,2)?></div></div>
+</div>
+
+<!-- 🔥 BOTÓN DE RETIRO DE GANANCIA SOLO SI CAJA ≥ 50,000 -->
+<?php if ($caja_total >= 50000): ?>
+<div class="card" style="background:#fff3cd;margin-top:15px">
+<h3>💰 Retiro de Ganancias</h3>
+<p>Tu caja alcanzó <b>$50,000 o más</b>. Puedes retirar <b>$30,000</b> y dejar <b>$20,000</b> para seguir prestando.</p>
+<form method="POST">
+<input type="hidden" name="retirar_ganancia" value="1">
+<button class="btn">Retirar $30,000 de Ganancia</button>
+</form>
+</div>
+<?php endif; ?>
+
+<div class="grid">
+<div class="card"><h3>📆 Hoy</h3><div class="big">$<?=number_format($hoy,2)?></div></div>
+<div class="card"><h3>🗓 Semana</h3><div class="big">$<?=number_format($semana,2)?></div></div>
+<div class="card"><h3>📅 Mes</h3><div class="big">$<?=number_format($mes,2)?></div></div>
+<div class="card"><h3>📈 Año</h3><div class="big">$<?=number_format($anio,2)?></div></div>
+</div>
+
+<div class="card">
+<h3>➕ Ingreso</h3>
+<form method="POST" class="grid">
+<input type="hidden" name="ingreso_efectivo">
+<input type="number" step="0.01" name="monto" placeholder="Monto efectivo" required>
+<button class="btn">Agregar Efectivo</button>
+</form>
+<form method="POST" class="grid" style="margin-top:10px">
+<input type="hidden" name="ingreso_banco">
+<input type="number" step="0.01" name="monto" placeholder="Monto banca móvil" required>
+<button class="btn">Agregar Banco</button>
+</form>
+</div>
+
+<div class="card">
+<h3>➖ Gasto / Deducción</h3>
+<form method="POST" class="grid">
+<input type="hidden" name="gasto">
+<select name="concepto">
+<option>GASOLINA</option>
+<option>DESPONCHES</option>
+<option>FALTANTE</option>
+<option>GASTOS GENERALES</option>
+<option>TIEMPO AIRE 📱</option>
+</select>
+<select name="medio">
+<option>EFECTIVO</option>
+<option>BANCO</option>
+</select>
+<input type="number" step="0.01" name="monto" required>
+<button class="btn">Registrar</button>
+</form>
+</div>
+
+<?php if($bonoDisponible): ?>
+<div class="card" style="background:#eafaf1">
+<h3>🎁 Bono Disponible</h3>
+<form method="POST">
+<input type="hidden" name="gasto">
+<input type="hidden" name="concepto" value="BONO">
+<input type="hidden" name="medio" value="EFECTIVO">
+<input type="hidden" name="monto" value="5000">
+<button class="btn">Cobrar Bono</button>
+</form>
+</div>
+<?php endif; ?>
+
+<div class="card fixed">
+<h3>📋 Historial</h3>
+<table width="100%">
+<tr>
+<th>Fecha</th>
+<th>Tipo</th>
+<th>Concepto</th>
+<th>Medio</th>
+<th>Monto</th>
+<th>Cliente</th>
+</tr>
+<?php
+$h = $conexion->query("
+SELECT 
+    c.fecha,
+    c.tipo,
+    c.concepto,
+    c.medio,
+    c.monto,
+    CONCAT(cl.nombre,' ',cl.apellido) AS cliente_nombre
+FROM caja c
+LEFT JOIN prestamos p 
+    ON p.id_empleado = c.id_empleado 
+    AND p.monto_prestado = c.monto
+    AND DATE(p.fecha_inicio) = DATE(c.fecha)
+LEFT JOIN clientes cl 
+    ON cl.id_cliente = p.id_cliente
+WHERE c.id_empleado = $id_empleado
+ORDER BY c.fecha DESC
+");
+
+while($r=$h->fetch_assoc()):
+?>
+<tr>
+<td><?=date('d/m/Y H:i',strtotime($r['fecha']))?></td>
+<td><?=$r['tipo']?></td>
+<td><?=$r['concepto']?></td>
+<td><?=$r['medio']?></td>
+<td>$<?=number_format($r['monto'],2)?></td>
+<td><?= $r['cliente_nombre'] ?? '-' ?></td>
+</tr>
+<?php endwhile; ?>
+</table>
+</div>
+
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * guardar_caja.php
+ *********************************/
+
+
+<?php
+session_start();
+include("conexion.php");
+
+$id_empleado = $_SESSION['id_personal'];
+$monto   = floatval($_POST['monto']);
+$tipo    = $_POST['tipo'];
+$medio   = $_POST['medio'];
+$concepto = $_POST['concepto'] ?? '';
+
+// ❌ VALIDACIÓN CLAVE
+if ($medio === 'BANCO' && $tipo === 'SALIDA') {
+    echo "<script>
+        alert('❌ En BANCO solo se permiten ENTRADAS');
+        window.history.back();
+    </script>";
+    exit;
+}
+
+$stmt = $conexion->prepare("
+    INSERT INTO caja (id_empleado, monto, tipo, medio, concepto)
+    VALUES (?, ?, ?, ?, ?)
+");
+
+$stmt->bind_param("idsss",
+    $id_empleado,
+    $monto,
+    $tipo,
+    $medio,
+    $concepto
+);
+
+$stmt->execute();
+
+header("Location: estatus_caja.php");
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * guardar_prestamo.php
+ *********************************/
+
+
+$conexion->query("
+INSERT INTO caja(tipo,monto,concepto,id_empleado)
+VALUES('SALIDA',$monto_prestado,'Nuevo préstamo',$id_asesor)
+");
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * hash.php
+ *********************************/
+
+
+<?php
+echo password_hash("1234", PASSWORD_DEFAULT);
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * historial_cambio.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+$historial = $conexion->query("
+    SELECT 
+        h.fecha,
+        c.nombre,
+        c.apellido,
+        u1.usuario AS anterior,
+        u2.usuario AS nuevo,
+        u3.usuario AS autorizado
+    FROM historial_clientes h
+    INNER JOIN clientes c ON h.id_cliente = c.id_cliente
+    INNER JOIN usuarios u1 ON h.asesor_anterior = u1.id_usuario
+    INNER JOIN usuarios u2 ON h.asesor_nuevo = u2.id_usuario
+    INNER JOIN usuarios u3 ON h.autorizado_por = u3.id_usuario
+    ORDER BY h.fecha DESC
+");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Historial de Cambios</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+<div class="container mt-5">
+
+<?php include("menu.php"); ?>
+
+<div class="card shadow">
+    <div class="card-header bg-dark text-white">
+        <h4>Historial de Migraciones</h4>
+    </div>
+
+    <div class="card-body">
+        <table class="table table-bordered">
+            <tr>
+                <th>Cliente</th>
+                <th>Antes</th>
+                <th>Ahora</th>
+                <th>Autorizó</th>
+                <th>Fecha</th>
+            </tr>
+
+            <?php while ($h = $historial->fetch_assoc()) { ?>
+            <tr>
+                <td><?= $h['nombre']." ".$h['apellido'] ?></td>
+                <td><?= $h['anterior'] ?></td>
+                <td><?= $h['nuevo'] ?></td>
+                <td><?= $h['autorizado'] ?></td>
+                <td><?= $h['fecha'] ?></td>
+            </tr>
+            <?php } ?>
+        </table>
+    </div>
+</div>
+
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * historial_cliente.php
+ *********************************/
+
+
+<?php
+include("seguridad.php");
+include("conexion.php");
+include("menu.php");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Historial del Cliente | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+<div class="card shadow">
+    <div class="card-header bg-success text-white">
+        <h4 class="mb-0">Historial de Cliente</h4>
+    </div>
+
+    <div class="card-body">
+
+        <!-- BUSCAR CLIENTE POR NOMBRE -->
+        <form method="GET" class="row g-2 mb-3">
+            <div class="col-md-6">
+                <input type="text" name="nombre" class="form-control"
+                       placeholder="Nombre o apellido del cliente" required>
+            </div>
+            <div class="col-md-2">
+                <button class="btn btn-primary w-100">
+                    Ver historial
+                </button>
+            </div>
+        </form>
+
+<?php
+if (isset($_GET['nombre'])) {
+
+    $nombre = $conexion->real_escape_string($_GET['nombre']);
+
+    // BUSCAR CLIENTES (AHORA TRAEMOS MÁS DATOS)
+    $clientes = $conexion->query("
+        SELECT 
+            id_cliente, 
+            nombre, 
+            apellido, 
+            telefono,
+            direccion,
+            estatus
+        FROM clientes
+        WHERE nombre LIKE '%$nombre%'
+           OR apellido LIKE '%$nombre%'
+    ");
+
+    if ($clientes->num_rows == 0) {
+        echo "<div class='alert alert-danger'>Cliente no encontrado</div>";
+        exit;
+    }
+
+    while ($c = $clientes->fetch_assoc()) {
+
+        $id_cliente = $c['id_cliente'];
+        $nombre_cliente = $c['nombre']." ".$c['apellido'];
+
+        // 🔹 PANEL DE INFORMACIÓN DEL CLIENTE
+        echo "
+        <div class='card mb-3'>
+            <div class='card-header bg-info text-white'>
+                <b>Información del Cliente</b>
+            </div>
+            <div class='card-body'>
+                <div class='row'>
+                    <div class='col-md-6'>
+                        <b>Cliente:</b> $nombre_cliente <br>
+                        <b>ID Cliente:</b> $id_cliente <br>
+                        <b>Teléfono:</b> {$c['telefono']} <br>
+                        <b>Dirección:</b> {$c['direccion']}
+                    </div>
+                    <div class='col-md-6 text-end'>";
+
+        // ESTATUS DEL CLIENTE
+        if ($c['estatus'] === 'ACTIVO') {
+            echo "<span class='badge bg-success'>ACTIVO</span>";
+        } elseif ($c['estatus'] === 'MAL_HISTORIAL') {
+            echo "<span class='badge bg-warning text-dark'>MAL HISTORIAL</span>";
+        } else {
+            echo "<span class='badge bg-danger'>BLOQUEADO</span>";
+        }
+
+        echo "<br><br>";
+
+        // 🔹 BOTÓN NUEVO CRÉDITO (SOLO SI ESTÁ ACTIVO)
+        if ($c['estatus'] === 'ACTIVO') {
+            echo "
+            <a href='nuevo_prestamo.php?id_cliente=$id_cliente'
+               class='btn btn-success btn-sm'>
+               ➕ Nuevo Crédito
+            </a>";
+        }
+
+        echo "
+                    </div>
+                </div>
+            </div>
+        </div>
+        ";
+
+        // PRÉSTAMOS DEL CLIENTE
+        $prestamos = $conexion->query("
+            SELECT *
+            FROM prestamos
+            WHERE id_cliente = $id_cliente
+            ORDER BY fecha_inicio DESC
+        ");
+
+        if ($prestamos->num_rows == 0) {
+            echo "<div class='alert alert-warning'>
+                    Este cliente no tiene préstamos
+                  </div>";
+        }
+
+        while ($p = $prestamos->fetch_assoc()) {
+
+            // TOTAL PAGADO
+            $pagos = $conexion->query("
+                SELECT IFNULL(SUM(monto_pagado),0) AS total_pagado
+                FROM pagos
+                WHERE id_prestamo = ".$p['id_prestamo']
+            );
+
+            $total_pagado = $pagos->fetch_assoc()['total_pagado'];
+            $saldo = $p['total_pagar'] - $total_pagado;
+?>
+
+        <div class="card mb-3">
+            <div class="card-body">
+
+                <h6 class="text-primary">
+                    Crédito #<?= $p['id_prestamo'] ?>
+                </h6>
+
+                <div class="row">
+                    <div class="col-md-4">
+                        <b>Monto:</b> $<?= number_format($p['monto_prestado'],2) ?><br>
+                        <b>Total:</b> $<?= number_format($p['total_pagar'],2) ?><br>
+                        <b>Pago diario:</b> $<?= number_format($p['pago_diario'],2) ?>
+                    </div>
+
+                    <div class="col-md-4">
+                        <b>Pagado:</b> $<?= number_format($total_pagado,2) ?><br>
+                        <b>Saldo:</b> <b>$<?= number_format($saldo,2) ?></b><br>
+                        <b>Estado:</b> <?= $p['estado'] ?>
+                    </div>
+
+                    <div class="col-md-4">
+                        <b>Fecha inicio:</b> <?= $p['fecha_inicio'] ?>
+                    </div>
+                </div>
+
+<?php
+        // BOTÓN RENOVAR (TU MISMA REGLA, SOLO MÁS LIMPIA)
+        if ($total_pagado >= ($p['pago_diario'] * 18) && $p['estado'] == 'ACTIVO') {
+            echo "
+            <a href='nuevo_prestamo.php?renovar=".$p['id_prestamo']."'
+               class='btn btn-warning btn-sm mt-2'>
+               🔁 Renovar Préstamo
+            </a>";
+        }
+?>
+
+            </div>
+        </div>
+
+<?php
+        }
+    }
+}
+?>
+
+    </div>
+</div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * index.php
+ *********************************/
+
+
+<?php
+include("seguridad.php");
+include("menu.php");
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Principal | Préstamos JE</title>
+
+    <!-- BOOTSTRAP -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+    <!-- HEADER -->
+    <div class="card shadow mb-4">
+        <div class="card-body d-flex align-items-center">
+            <img src="img/logo.jpeg" alt="Préstamos JE" style="height:80px;" class="me-4">
+
+            <div>
+                <h3 class="mb-0">Préstamos JE</h3>
+                <small class="text-muted">
+                    Bienvenido, <b><?= $_SESSION['usuario'] ?></b>
+                    (<?= $_SESSION['rol'] ?>)
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- TARJETAS -->
+    <div class="row g-4">
+
+        <!-- CLIENTES -->
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Clientes</h5>
+                    <p>Registro y administración</p>
+
+                    <a href="registrar_cliente.php" class="btn btn-primary btn-sm mb-1">
+                        Nuevo
+                    </a>
+
+                    <a href="buscar_cliente.php" class="btn btn-outline-primary btn-sm mb-1">
+                        Buscar
+                    </a>
+
+                    <?php if ($_SESSION['rol'] == 'GERENTE') { ?>
+                        <br>
+                        <a href="clientes.php" class="btn btn-warning btn-sm mt-2">
+                            Migrar Cliente
+                        </a>
+                    <?php } ?>
+                </div>
+            </div>
+        </div>
+
+        <!-- PRÉSTAMOS -->
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Préstamos</h5>
+                    <p>Alta y control</p>
+                    <a href="nuevo_prestamo.php" class="btn btn-success btn-sm mb-1">
+                        Nuevo Préstamo
+                    </a>
+                    <a href="historial_cliente.php" class="btn btn-outline-success btn-sm">
+                        Historial
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- COBRANZA -->
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Cobranza</h5>
+                    <p>Pagos diarios</p>
+                    <a href="cobranza_diaria.php" class="btn btn-warning btn-sm">
+                        Cobrar
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- EMPLEADOS -->
+        <?php if ($_SESSION['rol'] == 'GERENTE') { ?>
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Empleados</h5>
+                    <p>Gestión interna</p>
+                    <a href="empleados.php" class="btn btn-dark btn-sm mb-1">
+                        Administrar
+                    </a>
+                    
+                    <a href="registrar_empleado.php" class="btn btn-outline-dark btn-sm">
+                        Nuevo
+                    </a>
+                </div>
+            </div>
+        </div>
+        <?php } ?>
+
+        <!-- REPORTES -->
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Reportes</h5>
+                    <p>PDF / Excel</p>
+                    <a href="reporte_diario.php" class="btn btn-secondary btn-sm">
+                        Ver
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- SALIR -->
+        <div class="col-md-4">
+            <div class="card shadow h-100">
+                <div class="card-body text-center">
+                    <h5>Sesión</h5>
+                    <p>Cerrar sistema</p>
+                    <a href="logout.php" class="btn btn-danger btn-sm">
+                        Cerrar sesión
+                    </a>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * info_cliente.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+$id = $_GET['id'];
+
+$cliente = $conexion->query("
+    SELECT nombre, apellido, estatus 
+    FROM clientes 
+    WHERE id_cliente=$id
+")->fetch_assoc();
+
+$prestamos = $conexion->query("
+    SELECT 
+        SUM(total_pagar) AS total,
+        IFNULL(SUM(p.monto_pagado),0) AS pagado
+    FROM prestamos pr
+    LEFT JOIN pagos p ON pr.id_prestamo = p.id_prestamo
+    WHERE pr.id_cliente=$id AND pr.estado!='PAGADO'
+")->fetch_assoc();
+
+$saldo = $prestamos['total'] - $prestamos['pagado'];
+
+echo "
+<b>Cliente:</b> {$cliente['nombre']} {$cliente['apellido']}<br>
+<b>Estatus:</b> {$cliente['estatus']}<br>
+<b>Saldo pendiente:</b> $".number_format($saldo,2)."
+";
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * login.php
+ *********************************/
+
+
+<?php
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
+
+session_start();
+include("conexion.php");
+
+$error = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    $usuario  = trim($_POST['usuario']);
+    $password = $_POST['password'];
+
+    $stmt = $conexion->prepare("
+        SELECT id_usuario, usuario, password, rol, id_empleado
+        FROM usuarios
+        WHERE usuario = ?
+        LIMIT 1
+    ");
+    $stmt->bind_param("s", $usuario);
+    $stmt->execute();
+    $res = $stmt->get_result();
+
+    if ($res->num_rows === 1) {
+        $u = $res->fetch_assoc();
+
+        if (password_verify($password, $u['password'])) {
+            $_SESSION['id_usuario']  = $u['id_usuario'];
+            $_SESSION['usuario']     = $u['usuario'];
+            $_SESSION['rol']         = $u['rol'];
+            $_SESSION['id_empleado'] = $u['id_empleado'];
+
+            header("Location: index.php");
+            exit;
+        } else {
+            $error = "Usuario o contraseña incorrectos";
+        }
+    } else {
+        $error = "Usuario o contraseña incorrectos";
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Login | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light d-flex align-items-center justify-content-center" style="height:100vh;">
+
+<div class="card shadow p-4" style="width:360px;">
+
+    <!-- LOGO -->
+    <div class="text-center mb-3">
+        <img src="img/logo.jpeg" alt="Préstamos JE" style="height:90px;">
+    </div>
+
+    <h4 class="text-center mb-3">Iniciar sesión</h4>
+
+    <?php if ($error != "") { ?>
+        <div class="alert alert-danger text-center">
+            <?= $error ?>
+        </div>
+    <?php } ?>
+
+    <form method="POST">
+
+        <div class="mb-3">
+            <label class="form-label">Usuario</label>
+            <input type="text" name="usuario" class="form-control" required>
+        </div>
+
+        <div class="mb-3">
+            <label class="form-label">Contraseña</label>
+            <input type="password" name="password" class="form-control" required>
+        </div>
+
+        <button class="btn btn-primary w-100">
+            Iniciar sesión
+        </button>
+
+    </form>
+
+    <div class="text-center mt-3 text-muted" style="font-size:13px;">
+        Préstamos JE © <?= date('Y') ?>
+    </div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * logout.php
+ *********************************/
+
+
+<?php
+session_start();
+session_destroy();
+header("Location: login.php");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * menu.php
+ *********************************/
+
+
+<div style="margin-bottom:20px;">
+    <a href="index.php" class="btn btn-secondary">
+        ⬅️ Volver al Inicio
+    </a>
+</div>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * migrar_cliente.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+// ============================
+// VALIDAR ID
+// ============================
+$id_cliente = intval($_GET['id'] ?? 0);
+if ($id_cliente == 0) {
+    header("Location: clientes.php");
+    exit;
+}
+
+// ============================
+// OBTENER CLIENTE + ASESOR ACTUAL
+// ============================
+$cliente = $conexion->query("
+    SELECT 
+        c.id_cliente,
+        c.nombre,
+        c.apellido,
+        c.id_asesor,
+        e.nombre AS asesor_nombre,
+        e.apellido AS asesor_apellido
+    FROM clientes c
+    INNER JOIN empleados e ON c.id_asesor = e.id_empleado
+    WHERE c.id_cliente = $id_cliente
+")->fetch_assoc();
+
+if (!$cliente) {
+    header("Location: clientes.php");
+    exit;
+}
+
+// ============================
+// OBTENER ASESORES (NOMBRE COMPLETO)
+// ============================
+$asesores = $conexion->query("
+    SELECT id_empleado, nombre, apellido
+    FROM empleados
+    WHERE rol = 'ASESOR' AND estatus = 'ACTIVO'
+");
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Migrar Cliente</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<?php include("menu.php"); ?>
+
+<div class="container mt-4">
+
+<div class="card shadow">
+    <div class="card-header bg-warning">
+        <h4 class="mb-0">Migrar Cliente</h4>
+    </div>
+
+    <div class="card-body">
+
+        <p><b>Cliente:</b> <?= $cliente['nombre']." ".$cliente['apellido'] ?></p>
+        <p><b>Asesor actual:</b>
+            <?= $cliente['asesor_nombre']." ".$cliente['asesor_apellido'] ?>
+        </p>
+
+        <form method="POST">
+            <label class="form-label">Nuevo Asesor</label>
+            <select name="nuevo_asesor" class="form-select mb-3" required>
+                <?php while ($a = $asesores->fetch_assoc()) { ?>
+                    <option value="<?= $a['id_empleado'] ?>"
+                        <?= $a['id_empleado'] == $cliente['id_asesor'] ? 'disabled' : '' ?>>
+                        <?= $a['nombre']." ".$a['apellido'] ?>
+                    </option>
+                <?php } ?>
+            </select>
+
+            <button class="btn btn-success w-100">
+                Migrar Cliente
+            </button>
+        </form>
+
+        <?php
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+            $nuevo = intval($_POST['nuevo_asesor']);
+            $anterior = $cliente['id_asesor'];
+
+            if ($nuevo != $anterior) {
+
+                // ACTUALIZAR CLIENTE
+                $conexion->query("
+                    UPDATE clientes
+                    SET id_asesor = $nuevo
+                    WHERE id_cliente = $id_cliente
+                ");
+
+                // GUARDAR HISTORIAL
+                $conexion->query("
+                    INSERT INTO historial_clientes
+                    (id_cliente, asesor_anterior, asesor_nuevo, autorizado_por)
+                    VALUES
+                    ($id_cliente, $anterior, $nuevo, ".$_SESSION['id_usuario'].")
+                ");
+
+                echo "<div class='alert alert-success mt-3'>
+                    Cliente migrado correctamente
+                </div>";
+            }
+        }
+        ?>
+
+        <a href="clientes.php" class="btn btn-secondary mt-3">
+            ⬅ Volver
+        </a>
+
+    </div>
+</div>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * movimientos_caja.php
+ *********************************/
+
+
+<?php
+session_start();
+include("seguridad.php");
+include("conexion.php");
+
+$id_empleado = $_SESSION['id_empleado'] ?? 0;
+
+/* =========================
+   PROCESAR FORMULARIOS
+========================= */
+if (isset($_POST['accion'])) {
+
+    $monto = floatval($_POST['monto']);
+
+    /* ===== INGRESO EFECTIVO ===== */
+    if ($_POST['accion'] === 'ingreso_efectivo') {
+
+        $stmt = $conexion->prepare("
+            INSERT INTO caja (tipo, monto, concepto, medio, id_empleado)
+            VALUES ('ENTRADA', ?, 'INGRESO EFECTIVO', 'EFECTIVO', ?)
+        ");
+        $stmt->bind_param("di", $monto, $id_empleado);
+        $stmt->execute();
+    }
+
+    /* ===== INGRESO BANCO ===== */
+    if ($_POST['accion'] === 'ingreso_banco') {
+
+        $stmt = $conexion->prepare("
+            INSERT INTO caja (tipo, monto, concepto, medio, id_empleado)
+            VALUES ('ENTRADA', ?, 'INGRESO BANCO', 'BANCO', ?)
+        ");
+        $stmt->bind_param("di", $monto, $id_empleado);
+        $stmt->execute();
+    }
+
+    /* ===== GASTOS / DEDUCCIONES ===== */
+    if ($_POST['accion'] === 'gasto') {
+
+        $concepto = $_POST['concepto'];
+        $medio    = $_POST['medio'];
+
+        $stmt = $conexion->prepare("
+            INSERT INTO caja (tipo, monto, concepto, medio, id_empleado)
+            VALUES ('SALIDA', ?, ?, ?, ?)
+        ");
+        $stmt->bind_param("dssi", $monto, $concepto, $medio, $id_empleado);
+        $stmt->execute();
+    }
+}
+
+/* =========================
+   TOTALES
+========================= */
+function totalCaja($conexion, $id, $medio = null) {
+    $filtro = $medio ? "AND medio='$medio'" : "";
+    return $conexion->query("
+        SELECT IFNULL(SUM(CASE WHEN tipo='ENTRADA' THEN monto ELSE -monto END),0) total
+        FROM caja WHERE id_empleado=$id $filtro
+    ")->fetch_assoc()['total'];
+}
+
+$efectivo = totalCaja($conexion, $id_empleado, 'EFECTIVO');
+$banco    = totalCaja($conexion, $id_empleado, 'BANCO');
+$caja     = $efectivo + $banco;
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * nuevo_prestamo.php
+
+<?php
+include("seguridad.php");
+include("conexion.php");
+include("validar_cliente.php");
+
+/* ============================
+   FUNCIONES DE CAJA
+============================ */
+function totalCaja($c,$id,$medio=null){
+    $f = $medio ? "AND medio='$medio'" : "";
+    return $c->query("
+        SELECT IFNULL(SUM(CASE WHEN tipo='ENTRADA' THEN monto ELSE -monto END),0) t
+        FROM caja WHERE id_empleado=$id $f
+    ")->fetch_assoc()['t'];
+}
+
+/* ===============================
+   CLIENTES SEGÚN ROL
+=============================== */
+if ($_SESSION['rol'] === 'ASESOR') {
+
+    $clientes = $conexion->query("
+        SELECT DISTINCT c.id_cliente, c.nombre, c.apellido
+        FROM clientes c
+        INNER JOIN prestamos p ON p.id_cliente = c.id_cliente
+        WHERE p.id_empleado = ".$_SESSION['id_empleado']."
+        ORDER BY c.nombre
+    ");
+
+} else {
+
+    $clientes = $conexion->query("
+        SELECT id_cliente, nombre, apellido 
+        FROM clientes 
+        WHERE estatus='ACTIVO'
+        ORDER BY nombre
+    ");
+}
+
+// Guardamos clientes en arreglo para JS
+$clientes_array = [];
+while ($c = $clientes->fetch_assoc()) {
+    $clientes_array[] = $c;
+}
+
+/* ===============================
+   EMPLEADOS (SOLO GERENTE)
+=============================== */
+$empleados_array = [];
+if ($_SESSION['rol'] === 'GERENTE') {
+    $empleados = $conexion->query("
+        SELECT id_empleado, nombre, apellido 
+        FROM empleados 
+        WHERE estatus='ACTIVO'
+        ORDER BY nombre
+    ");
+
+    while ($e = $empleados->fetch_assoc()) {
+        $e['efectivo'] = totalCaja($conexion, $e['id_empleado'], 'EFECTIVO');
+        $e['banco'] = totalCaja($conexion, $e['id_empleado'], 'BANCO');
+        $empleados_array[] = $e;
+    }
+}
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Nuevo Préstamo | Préstamos JE</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+
+<script>
+let clientes = <?php echo json_encode($clientes_array); ?>;
+let empleados = <?php echo json_encode($empleados_array); ?>;
+
+function seleccionarCliente() {
+    let input = document.getElementById("buscarCliente").value;
+    let hiddenInput = document.getElementById("clienteId");
+
+    let encontrado = clientes.find(c => 
+        (c.id_cliente + " - " + c.nombre + " " + c.apellido) === input
+    );
+
+    if (encontrado) {
+        hiddenInput.value = encontrado.id_cliente;
+        document.getElementById("errorCliente").style.display = "none";
+    } else {
+        hiddenInput.value = "";
+        document.getElementById("errorCliente").style.display = "block";
+    }
+}
+
+function mostrarSaldoAsesor() {
+    let id = document.getElementById("empleadoSelect").value;
+    let efectivoSpan = document.getElementById("saldoEfectivo");
+    let bancoSpan = document.getElementById("saldoBanco");
+
+    let emp = empleados.find(e => e.id_empleado == id);
+
+    if (emp) {
+        efectivoSpan.innerText = "$" + parseFloat(emp.efectivo).toFixed(2);
+        bancoSpan.innerText = "$" + parseFloat(emp.banco).toFixed(2);
+
+        document.getElementById("saldoCaja").style.display = "block";
+        document.getElementById("saldoEfectivoBase").value = emp.efectivo;
+        document.getElementById("saldoBancoBase").value = emp.banco;
+    } else {
+        document.getElementById("saldoCaja").style.display = "none";
+    }
+}
+
+function calcularDescuento() {
+    let montoPrestamo = parseFloat(document.getElementById("montoPrestamo").value) || 0;
+    let descEfectivo = parseFloat(document.getElementById("descEfectivo").value) || 0;
+
+    let totalDescontado = descEfectivo;
+    let descBanco = 0;
+
+    if (descEfectivo > montoPrestamo) {
+        descEfectivo = montoPrestamo;
+        document.getElementById("descEfectivo").value = montoPrestamo;
+    }
+
+    descBanco = montoPrestamo - descEfectivo;
+    totalDescontado = descEfectivo + descBanco;
+
+    document.getElementById("descBanco").value = descBanco.toFixed(2);
+    document.getElementById("totalDescuento").innerText = "$" + totalDescontado.toFixed(2);
+}
+
+function validarAntesEnviar() {
+    let montoPrestamo = parseFloat(document.getElementById("montoPrestamo").value) || 0;
+    let descEfectivo = parseFloat(document.getElementById("descEfectivo").value) || 0;
+    let descBanco = parseFloat(document.getElementById("descBanco").value) || 0;
+
+    if (descEfectivo + descBanco !== montoPrestamo) {
+        alert("⚠️ El total descontado debe ser igual al monto del préstamo.");
+        return false;
+    }
+
+    return true;
+}
+</script>
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+<?php include("menu.php"); ?>
+
+<div class="card shadow">
+<div class="card-header bg-primary text-white">
+<h4 class="mb-0">Nuevo Préstamo</h4>
+</div>
+
+<div class="card-body">
+
+<form method="POST" onsubmit="return validarAntesEnviar()">
+
+<!-- BUSCADOR -->
+<div class="mb-2">
+<label class="form-label">Buscar cliente</label>
+<input type="text"
+id="buscarCliente"
+class="form-control"
+list="listaClientes"
+placeholder="Escribe nombre, apellido o ID..."
+onchange="seleccionarCliente()"
+required>
+
+<datalist id="listaClientes">
+<?php foreach ($clientes_array as $c): ?>
+<option value="<?= $c['id_cliente']." - ".$c['nombre']." ".$c['apellido'] ?>">
+<?php endforeach; ?>
+</datalist>
+
+<input type="hidden" name="cliente" id="clienteId">
+
+<div id="errorCliente" class="text-danger mt-1" style="display:none;">
+⚠️ Debes seleccionar un cliente válido de la lista.
+</div>
+</div>
+
+<!-- EMPLEADO -->
+<?php if ($_SESSION['rol'] === 'GERENTE') { ?>
+<div class="mb-3">
+<label class="form-label">Empleado</label>
+<select name="empleado" id="empleadoSelect" class="form-select" required onchange="mostrarSaldoAsesor()">
+<option value="">Selecciona empleado</option>
+<?php foreach ($empleados_array as $e) { ?>
+<option value="<?= $e['id_empleado'] ?>">
+<?= $e['nombre']." ".$e['apellido'] ?>
+</option>
+<?php } ?>
+</select>
+</div>
+
+<div id="saldoCaja" class="alert alert-info" style="display:none;">
+<b>Saldo del asesor:</b><br>
+💵 Efectivo: <span id="saldoEfectivo"></span><br>
+🏦 Banco: <span id="saldoBanco"></span>
+</div>
+
+<input type="hidden" id="saldoEfectivoBase">
+<input type="hidden" id="saldoBancoBase">
+
+<?php } else { ?>
+<input type="hidden" name="empleado" value="<?= $_SESSION['id_empleado'] ?>">
+<?php } ?>
+
+<!-- MONTO -->
+<div class="mb-3">
+<label class="form-label">Monto a prestar</label>
+<input type="number" name="monto" id="montoPrestamo" class="form-control" required min="100" oninput="calcularDescuento()">
+</div>
+
+<div class="mb-3">
+<label>Descontar de EFECTIVO</label>
+<input type="number" id="descEfectivo" name="descEfectivo" class="form-control" oninput="calcularDescuento()" min="0">
+</div>
+
+<div class="mb-3">
+<label>Descontar de BANCO</label>
+<input type="number" id="descBanco" name="descBanco" class="form-control" readonly>
+</div>
+
+<div class="alert alert-secondary">
+Total a descontar: <b id="totalDescuento">$0.00</b>
+</div>
+
+<button class="btn btn-success w-100">
+Crear Préstamo
+</button>
+</form>
+
+<?php
+if ($_POST) {
+
+$id_cliente  = intval($_POST['cliente']);
+$id_empleado = intval($_POST['empleado']);
+$monto_original = floatval($_POST['monto']);
+$desc_efectivo = floatval($_POST['descEfectivo']);
+$desc_banco = floatval($_POST['descBanco']);
+
+// SALDOS ACTUALES
+$saldo_efectivo = totalCaja($conexion, $id_empleado, 'EFECTIVO');
+$saldo_banco = totalCaja($conexion, $id_empleado, 'BANCO');
+
+// VALIDACIÓN DE SALDO
+if ($desc_efectivo > $saldo_efectivo || $desc_banco > $saldo_banco) {
+    echo "<div class='alert alert-danger mt-4'>❌ Saldo insuficiente.</div>";
+    exit;
+}
+
+// VALIDAR LÍMITE DE CRÉDITO
+$monto = puedePrestar($id_cliente, $monto_original);
+
+// CÁLCULOS
+$interes = $monto * 0.20;
+$total = $monto + $interes;
+$pago_diario = $total / 20;
+$fecha_inicio = date('Y-m-d');
+
+// INSERTAR PRÉSTAMO
+$conexion->query("
+INSERT INTO prestamos
+(id_cliente, id_empleado, monto_prestado, interes, total_pagar, pago_diario, fecha_inicio, estado)
+VALUES
+($id_cliente, $id_empleado, $monto, $interes, $total, $pago_diario, '$fecha_inicio', 'ACTIVO')
+");
+
+$numero_credito = $conexion->insert_id;
+$concepto = "PRESTAMO #$numero_credito";
+
+// DESCONTAR EFECTIVO
+$stmt = $conexion->prepare("
+INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+VALUES ('SALIDA', ?, 'EFECTIVO', ?, ?)
+");
+$stmt->bind_param("sdi", $concepto, $desc_efectivo, $id_empleado);
+$stmt->execute();
+
+// DESCONTAR BANCO
+$stmt = $conexion->prepare("
+INSERT INTO caja (tipo, concepto, medio, monto, id_empleado)
+VALUES ('SALIDA', ?, 'BANCO', ?, ?)
+");
+$stmt->bind_param("sdi", $concepto, $desc_banco, $id_empleado);
+$stmt->execute();
+
+// NUEVOS SALDOS
+$nuevo_efectivo = $saldo_efectivo - $desc_efectivo;
+$nuevo_banco = $saldo_banco - $desc_banco;
+
+// DATOS DEL CLIENTE
+$cliente = $conexion->query("
+SELECT nombre, apellido 
+FROM clientes 
+WHERE id_cliente = $id_cliente
+")->fetch_assoc();
+
+echo "
+<div class='alert alert-success mt-4'>
+<h5>Préstamo creado correctamente</h5>
+<b>Cliente:</b> {$cliente['nombre']} {$cliente['apellido']}<br>
+<b>N° Crédito:</b> $numero_credito<br><br>
+<b>Monto:</b> $$monto<br>
+<b>Interés:</b> $$interes<br>
+<b>Total a pagar:</b> $$total<br>
+<b>Pago diario:</b> $$pago_diario<br><br>
+✔️ Descuento aplicado:<br>
+💵 -$$desc_efectivo EFECTIVO (Nuevo saldo: $$nuevo_efectivo)<br>
+🏦 -$$desc_banco BANCO (Nuevo saldo: $$nuevo_banco)
+</div>
+
+<script>
+document.getElementById('saldoEfectivo').innerText = '$' + parseFloat($nuevo_efectivo).toFixed(2);
+document.getElementById('saldoBanco').innerText = '$' + parseFloat($nuevo_banco).toFixed(2);
+</script>
+";
+}
+?>
+
+</div>
+</div>
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * proyecto_completo.php
+ *********************************/
+
+
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * reactivar_empleado.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+    header("Location: empleados.php");
+    exit;
+}
+
+$id = (int) $_GET['id'];
+
+// 1️⃣ Reactivar empleado
+$conexion->query("
+    UPDATE empleados 
+    SET estatus = 'ACTIVO' 
+    WHERE id_empleado = $id
+");
+
+// 2️⃣ Reactivar usuario relacionado
+$conexion->query("
+    UPDATE usuarios
+    SET estado = 1
+    WHERE id_empleado = $id
+");
+
+// Auditoría
+@$conexion->query("
+    INSERT INTO historial_empleados
+    (id_empleado, accion, fecha, realizado_por)
+    VALUES (
+        $id,
+        'REACTIVADO',
+        NOW(),
+        '" . $_SESSION['usuario'] . "'
+    )
+");
+
+header("Location: empleados.php");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * registrar_cliente.php
+ *********************************/
+
+
+<?php
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
+include("seguridad.php");
+include("conexion.php");
+
+/*********************************
+ * VALIDAR SESIÓN
+ *********************************/
+if (!isset($_SESSION['id_usuario'])) {
+    header("Location: login.php");
+    exit;
+}
+
+$id_usuario = $_SESSION['id_usuario'];
+$error = "";
+
+/*********************************
+ * OBTENER ASESORES
+ *********************************/
+$asesores = $conexion->query("
+    SELECT e.id_empleado, e.nombre, e.apellido
+    FROM empleados e
+    INNER JOIN usuarios u ON u.id_empleado = e.id_empleado
+    WHERE u.rol = 'ASESOR' AND e.estatus = 'ACTIVO'
+    ORDER BY e.nombre
+");
+
+/*********************************
+ * PROCESAR FORMULARIO
+ *********************************/
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    // CURP O INE (un solo campo en BD)
+    $curp_ine         = trim($_POST['curp_ine'] ?? '');
+    $nombre           = trim($_POST['nombre']);
+    $apellido         = trim($_POST['apellido']);
+    $fecha_nacimiento = $_POST['fecha_nacimiento'] ?: NULL;
+    $direccion        = trim($_POST['direccion']);
+    $numero_exterior  = trim($_POST['numero_exterior']);
+    $colonia          = trim($_POST['colonia']);
+    $telefono         = trim($_POST['telefono']);
+    $negocio          = trim($_POST['negocio']);
+    $observaciones    = trim($_POST['observaciones']);
+    $autoriza_credito = $_POST['autoriza_credito'];
+    $id_asesor        = intval($_POST['id_asesor']);
+
+    if ($numero_exterior === '') {
+        $numero_exterior = 'S/N';
+    }
+
+    if (
+        $nombre === '' || $apellido === '' ||
+        $direccion === '' || $colonia === '' ||
+        $telefono === '' || $id_asesor === 0
+    ) {
+        $error = "Los campos obligatorios deben llenarse";
+    } else {
+
+        /*********************************
+         * VALIDAR DUPLICADO (CURP / INE)
+         *********************************/
+        if ($curp_ine !== '') {
+
+            $check = $conexion->prepare("
+                SELECT id_cliente
+                FROM clientes
+                WHERE curp_ine = ?
+                LIMIT 1
+            ");
+            $check->bind_param("s", $curp_ine);
+            $check->execute();
+            $check->store_result();
+
+            if ($check->num_rows > 0) {
+                $error = "⚠️ El cliente ya está registrado (CURP / INE duplicado)";
+            }
+        }
+
+        if ($error === "") {
+
+            $stmt = $conexion->prepare("
+                INSERT INTO clientes (
+                    curp_ine,
+                    nombre,
+                    apellido,
+                    fecha_nacimiento,
+                    direccion,
+                    numero_exterior,
+                    colonia,
+                    telefono,
+                    negocio,
+                    observaciones,
+                    autoriza_credito,
+                    estatus,
+                    id_asesor,
+                    id_usuario
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVO', ?, ?)
+            ");
+
+            $stmt->bind_param(
+                "sssssssssssii",
+                $curp_ine,
+                $nombre,
+                $apellido,
+                $fecha_nacimiento,
+                $direccion,
+                $numero_exterior,
+                $colonia,
+                $telefono,
+                $negocio,
+                $observaciones,
+                $autoriza_credito,
+                $id_asesor,
+                $id_usuario
+            );
+
+            if ($stmt->execute()) {
+                header("Location: clientes.php?ok=1");
+                exit;
+            } else {
+                $error = "Error al registrar cliente";
+            }
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registrar Cliente | Préstamos JE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-5">
+<div class="row justify-content-center">
+<div class="col-md-9">
+
+<div class="card shadow">
+    <div class="card-header bg-primary text-white text-center">
+        <h5>Registrar Cliente</h5>
+    </div>
+
+    <div class="card-body">
+
+        <?php if ($error != "") { ?>
+            <div class="alert alert-danger"><?= $error ?></div>
+        <?php } ?>
+
+        <form method="POST">
+
+            <div class="row">
+                <div class="col-md-12 mb-3">
+                    <label>CURP o INE (opcional)</label>
+                    <input type="text" name="curp_ine" class="form-control">
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label>Nombre *</label>
+                    <input type="text" name="nombre" class="form-control" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label>Apellido *</label>
+                    <input type="text" name="apellido" class="form-control" required>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label>Fecha de nacimiento</label>
+                <input type="date" name="fecha_nacimiento" class="form-control">
+            </div>
+
+            <div class="row">
+                <div class="col-md-8 mb-3">
+                    <label>Dirección *</label>
+                    <input type="text" name="direccion" class="form-control" required>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label>Número Exterior</label>
+                    <input type="text" name="numero_exterior" class="form-control" placeholder="S/N">
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label>Colonia *</label>
+                    <input type="text" name="colonia" class="form-control" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label>Teléfono *</label>
+                    <input type="text" name="telefono" class="form-control" required>
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label>Negocio donde trabaja</label>
+                <input type="text" name="negocio" class="form-control">
+            </div>
+
+            <div class="mb-3">
+                <label>Observaciones</label>
+                <textarea name="observaciones" class="form-control"></textarea>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label>¿Autoriza crédito?</label>
+                    <select name="autoriza_credito" class="form-select">
+                        <option value="SI">Sí</option>
+                        <option value="NO">No</option>
+                    </select>
+                </div>
+
+                <div class="col-md-6 mb-3">
+                    <label>Asesor *</label>
+                    <select name="id_asesor" class="form-select" required>
+                        <option value="">Seleccione asesor</option>
+                        <?php while ($a = $asesores->fetch_assoc()) { ?>
+                            <option value="<?= $a['id_empleado'] ?>">
+                                <?= $a['nombre']." ".$a['apellido'] ?>
+                            </option>
+                        <?php } ?>
+                    </select>
+                </div>
+            </div>
+
+            <button class="btn btn-success w-100 mb-2">
+                💾 Guardar Cliente
+            </button>
+
+            <a href="index.php" class="btn btn-secondary w-100">
+                ⬅ Volver al inicio
+            </a>
+
+        </form>
+
+    </div>
+</div>
+
+</div>
+</div>
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * registrar_cobros.php
+ *********************************/
+
+
+<?php
+$roles_permitidos = ['GERENTE','ASESOR'];
+include("seguridad.php");
+include("conexion.php");
+
+if (!isset($_POST['pagos']) || !is_array($_POST['pagos'])) {
+    header("Location: cobranza_diaria.php");
+    exit;
+}
+
+$id_empleado = $_SESSION['id_empleado'];
+
+foreach ($_POST['pagos'] as $id_prestamo => $monto) {
+
+    $id_prestamo = (int)$id_prestamo;
+    $monto = (float)$monto;
+
+    if ($monto <= 0) continue;
+
+    // Obtener saldo actual
+    $sql = "
+        SELECT 
+            pr.total_pagar,
+            IFNULL(SUM(pa.monto_pagado),0) AS pagado
+        FROM prestamos pr
+        LEFT JOIN pagos pa ON pr.id_prestamo = pa.id_prestamo
+        WHERE pr.id_prestamo = $id_prestamo
+        GROUP BY pr.id_prestamo
+    ";
+
+    $res = $conexion->query($sql);
+    if (!$res || $res->num_rows == 0) continue;
+
+    $data  = $res->fetch_assoc();
+    $saldo = $data['total_pagar'] - $data['pagado'];
+
+    if ($monto > $saldo) continue;
+
+    // Registrar pago
+    $conexion->query("
+        INSERT INTO pagos (id_prestamo, fecha_pago, monto_pagado)
+        VALUES ($id_prestamo, CURDATE(), $monto)
+    ");
+
+    // Registrar en caja (cobrado del día)
+    $conexion->query("
+        INSERT INTO caja (tipo, monto, concepto, id_empleado, fecha)
+        VALUES ('ENTRADA', $monto, 'Cobranza diaria', $id_empleado, CURDATE())
+    ");
+
+    // Marcar préstamo como pagado
+    if (($saldo - $monto) <= 0) {
+        $conexion->query("
+            UPDATE prestamos
+            SET estado = 'PAGADO'
+            WHERE id_prestamo = $id_prestamo
+        ");
+    }
+}
+
+header("Location: cobranza_diaria.php?pago=ok");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * registrar_empleado.php
+ *********************************/
+
+
+<?php
+// 🔐 SOLO GERENTE
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+include("menu.php");
+
+$mensaje = "";
+$tipo = "";
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    // DATOS
+    $nombre    = trim($_POST['nombre']);
+    $apellido  = trim($_POST['apellido']);
+    $telefono  = trim($_POST['telefono']);
+    $direccion = trim($_POST['direccion']);
+    $usuario   = trim($_POST['usuario']);
+    $rol       = $_POST['rol'];
+    $password  = $_POST['password'];
+
+    if ($nombre === "" || $apellido === "" || $usuario === "" || $password === "") {
+        $mensaje = "Todos los campos obligatorios deben llenarse";
+        $tipo = "danger";
+    } else {
+
+        // VERIFICAR USUARIO DUPLICADO
+        $check = $conexion->prepare(
+            "SELECT id_usuario FROM usuarios WHERE usuario = ?"
+        );
+        $check->bind_param("s", $usuario);
+        $check->execute();
+        $check->store_result();
+
+        if ($check->num_rows > 0) {
+
+            $mensaje = "El nombre de usuario ya existe";
+            $tipo = "danger";
+            $check->close();
+
+        } else {
+
+            $check->close();
+
+            // INSERTAR EMPLEADO
+            $stmt = $conexion->prepare("
+                INSERT INTO empleados
+                (nombre, apellido, telefono, direccion, rol, estatus)
+                VALUES (?, ?, ?, ?, ?, 'ACTIVO')
+            ");
+            $stmt->bind_param(
+                "sssss",
+                $nombre,
+                $apellido,
+                $telefono,
+                $direccion,
+                $rol
+            );
+            $stmt->execute();
+
+            $id_empleado = $conexion->insert_id;
+            $stmt->close();
+
+            // INSERTAR USUARIO (RELACIONADO)
+            $password_hash = password_hash($password, PASSWORD_DEFAULT);
+
+            $stmt2 = $conexion->prepare("
+                INSERT INTO usuarios
+                (usuario, password, rol, id_empleado)
+                VALUES (?, ?, ?, ?)
+            ");
+            $stmt2->bind_param(
+                "sssi",
+                $usuario,
+                $password_hash,
+                $rol,
+                $id_empleado
+            );
+            $stmt2->execute();
+            $stmt2->close();
+
+            // AUDITORÍA (SI EXISTE)
+            @$conexion->query("
+                INSERT INTO historial_empleados
+                (id_empleado, accion, fecha, realizado_por)
+                VALUES (
+                    $id_empleado,
+                    'ALTA',
+                    NOW(),
+                    '" . $_SESSION['usuario'] . "'
+                )
+            ");
+
+            $mensaje = "Empleado y usuario registrados correctamente";
+            $tipo = "success";
+        }
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Registrar Empleado</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-4">
+
+    <div class="card shadow">
+        <div class="card-header bg-dark text-white">
+            <h4>Registrar Empleado</h4>
+        </div>
+
+        <div class="card-body">
+
+            <?php if ($mensaje != "") { ?>
+                <div class="alert alert-<?= $tipo ?>">
+                    <?= $mensaje ?>
+                </div>
+            <?php } ?>
+
+            <form method="POST">
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Nombre</label>
+                        <input type="text" name="nombre" class="form-control" required>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Apellido</label>
+                        <input type="text" name="apellido" class="form-control" required>
+                    </div>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Teléfono</label>
+                        <input type="text" name="telefono" class="form-control">
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Dirección</label>
+                        <input type="text" name="direccion" class="form-control">
+                    </div>
+                </div>
+
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Usuario</label>
+                        <input type="text" name="usuario" class="form-control" required>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label">Contraseña</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Rol</label>
+                    <select name="rol" class="form-select">
+                        <option value="ASESOR">ASESOR</option>
+                        <option value="SUPERVISOR">SUPERVISOR</option>
+                        <option value="GERENTE">GERENTE</option>
+                    </select>
+                </div>
+
+                <button class="btn btn-primary w-100">
+                    Registrar Empleado
+                </button>
+
+            </form>
+
+        </div>
+    </div>
+
+    <a href="empleados.php" class="btn btn-secondary mt-3">
+        ⬅ Volver a empleados
+    </a>
+
+</div>
+
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * registrar_pago.php
+ *********************************/
+
+
+<?php
+// 🔐 Roles permitidos
+$roles_permitidos = ['GERENTE', 'ASESOR'];
+include("seguridad.php");
+include("conexion.php");
+
+// ============================
+// VALIDAR POST
+// ============================
+if (!isset($_POST['id_prestamo'], $_POST['monto_pagado'])) {
+    die("Datos incompletos");
+}
+
+$id_prestamo  = intval($_POST['id_prestamo']);
+$monto_pagado = floatval($_POST['monto_pagado']);
+
+if ($id_prestamo <= 0 || $monto_pagado <= 0) {
+    die("Datos inválidos");
+}
+
+// ============================
+// OBTENER SALDO ACTUAL
+// ============================
+$sql = "
+    SELECT 
+        pr.total_pagar,
+        IFNULL(SUM(pa.monto_pagado),0) AS pagado
+    FROM prestamos pr
+    LEFT JOIN pagos pa ON pr.id_prestamo = pa.id_prestamo
+    WHERE pr.id_prestamo = $id_prestamo
+    GROUP BY pr.id_prestamo
+";
+
+$res = $conexion->query($sql);
+
+if (!$res || $res->num_rows === 0) {
+    die("Préstamo no encontrado");
+}
+
+$data = $res->fetch_assoc();
+$saldo = $data['total_pagar'] - $data['pagado'];
+
+if ($monto_pagado > $saldo) {
+    die("El monto excede el saldo");
+}
+
+// ============================
+// REGISTRAR PAGO
+// ============================
+$conexion->query("
+    INSERT INTO pagos (id_prestamo, fecha_pago, monto_pagado)
+    VALUES ($id_prestamo, CURDATE(), $monto_pagado)
+");
+
+// ============================
+// MARCAR COMO PAGADO SI LIQUIDA
+// ============================
+if (($saldo - $monto_pagado) <= 0) {
+    $conexion->query("
+        UPDATE prestamos
+        SET estado = 'PAGADO'
+        WHERE id_prestamo = $id_prestamo
+    ");
+}
+
+// ============================
+// REDIRECCIÓN
+// ============================
+header("Location: cobranza_diaria.php?pago=ok");
+exit;
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * rehash.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+$nuevoPassword = password_hash("123456", PASSWORD_DEFAULT);
+
+$conexion->query("
+    UPDATE usuarios
+    SET password = '$nuevoPassword'
+");
+
+echo "Passwords corregidos";
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * reporte_diario.php
+ *********************************/
+
+
+<?php
+// 🔐 Solo GERENTE puede ver reportes
+$roles_permitidos = ['GERENTE'];
+include("seguridad.php");
+include("conexion.php");
+
+// Fecha seleccionada (por defecto HOY)
+$fecha = $_GET['fecha'] ?? date('Y-m-d');
+
+// Pagos del día
+$pagos = $conexion->query("
+    SELECT 
+        p.id_pago,
+        p.monto_pagado,
+        p.fecha_pago,
+        pr.id_prestamo,
+        c.nombre,
+        c.apellido
+    FROM pagos p
+    INNER JOIN prestamos pr ON p.id_prestamo = pr.id_prestamo
+    INNER JOIN clientes c ON pr.id_cliente = c.id_cliente
+    WHERE p.fecha_pago = '$fecha'
+");
+
+$total_dia = 0;
+?>
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Reporte Diario</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+
+<body class="bg-light">
+
+<div class="container mt-5">
+
+<?php include("menu.php"); ?>
+
+<div class="card shadow">
+    <div class="card-header bg-secondary text-white">
+        <h4 class="mb-0">Reporte Diario de Pagos</h4>
+    </div>
+
+    <div class="card-body">
+
+        <!-- FILTRO FECHA -->
+        <form method="GET" class="mb-3 d-flex gap-2">
+            <input type="date" name="fecha" value="<?= $fecha ?>" class="form-control w-auto">
+            <button class="btn btn-secondary">Ver</button>
+        </form>
+
+        <?php if ($pagos->num_rows == 0) { ?>
+            <div class="alert alert-warning">
+                No hay pagos registrados para esta fecha
+            </div>
+        <?php } else { ?>
+
+        <table class="table table-bordered table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Cliente</th>
+                    <th>N° Crédito</th>
+                    <th>Monto Pagado</th>
+                    <th>Fecha</th>
+                </tr>
+            </thead>
+            <tbody>
+
+            <?php while ($p = $pagos->fetch_assoc()) {
+                $total_dia += $p['monto_pagado'];
+            ?>
+                <tr>
+                    <td><?= $p['nombre']." ".$p['apellido'] ?></td>
+                    <td><?= $p['id_prestamo'] ?></td>
+                    <td>$<?= $p['monto_pagado'] ?></td>
+                    <td><?= $p['fecha_pago'] ?></td>
+                </tr>
+            <?php } ?>
+
+            </tbody>
+        </table>
+
+        <h5 class="text-end">
+            Total del día: <b>$<?= $total_dia ?></b>
+        </h5>
+
+        <?php } ?>
+
+    </div>
+</div>
+
+</div>
+</body>
+</html>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * seguridad.php
+ *********************************/
+
+
+<?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+include("conexion.php");
+
+/*********************************
+ * VALIDAR SESIÓN
+ *********************************/
+if (!isset($_SESSION['usuario'])) {
+    header("Location: login.php");
+    exit;
+}
+
+/*********************************
+ * VALIDAR ROLES
+ *********************************/
+if (isset($roles_permitidos)) {
+    if (!in_array($_SESSION['rol'], $roles_permitidos)) {
+        echo "Acceso denegado";
+        exit;
+    }
+}
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * validar_cliente.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+function puedePrestar($id_cliente, $monto) {
+    global $conexion;
+
+    $res = $conexion->query("
+        SELECT COUNT(*) AS atrasos 
+        FROM prestamos 
+        WHERE id_cliente=$id_cliente 
+        AND estado='ATRASADO'
+    ");
+
+    $atrasos = $res->fetch_assoc()['atrasos'];
+
+    if ($atrasos > 0) {
+        return $monto * 0.5; // solo prestar 50%
+    }
+    return $monto;
+}
+?>
+
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+/*********************************
+ * verificar_atrasos.php
+ *********************************/
+
+
+<?php
+include("conexion.php");
+
+$prestamos = $conexion->query("
+SELECT p.id_prestamo, p.total_pagar,
+DATEDIFF(CURDATE(), p.fecha_inicio) AS dias,
+IFNULL(SUM(pa.monto_pagado),0) AS pagado
+FROM prestamos p
+LEFT JOIN pagos pa ON p.id_prestamo = pa.id_prestamo
+GROUP BY p.id_prestamo
+");
+
+while ($row = $prestamos->fetch_assoc()) {
+    if ($row['dias'] > 20 && $row['pagado'] < $row['total_pagar']) {
+        $conexion->query("
+            UPDATE prestamos 
+            SET estado='ATRASADO' 
+            WHERE id_prestamo=".$row['id_prestamo']
+        );
+    }
+}
+
+echo "Atrasos verificados";
+?>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
